@@ -4,26 +4,7 @@ A TUI for the [NeetCode](https://neetcode.io) roadmap. Browse the topic graph,
 solve problems in a real buffer with your own LSP and keymaps, run the visible
 test cases **locally**, and submit to NeetCode's cloud judge for the hidden suite.
 
-```text
-                                        ╭──────────────────────╮
-                                        │    Arrays & Hash     │
-                                        │ ██████████████░░ 8/9 │
-                                        ╰──────────────────────╯
-                                                    │
-                                       ╭────────────┴─────────────╮
-                                       │                          │
-                           ╭──────────────────────╮   ╭──────────────────────╮
-                           │     Two Pointers     │   │        Stack         │
-                           │ ██████████░░░░░░ 3/5 │   │ ███░░░░░░░░░░░░░ 1/6 │
-                           ╰──────────────────────╯   ╰──────────────────────╯
-                                       │
-                         ╭─────────────┴────────────┬──────────────────────────╮
-                         │                          │                          │
-             ╭──────────────────────╮   ╭──────────────────────╮   ╭──────────────────────╮
-             │    Binary Search     │   │    Sliding Window    │   │     Linked List      │
-             │ █████░░░░░░░░░░░ 2/7 │   │ ███████████░░░░░ 4/6 │   │ ████████░░░░░░░ 6/11 │
-             ╰──────────────────────╯   ╰──────────────────────╯   ╰──────────────────────╯
-```
+![NeetCode Roadmap](assets/screenshot.png)
 
 This repo is the result of some careful LLM prompting. I am still happy to
 respond to issues and PRs and understand the codebase enough to maintain it
