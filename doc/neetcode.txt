@@ -1,0 +1,199 @@
+*neetcode.txt*  A TUI for the NeetCode roadmap
+
+==============================================================================
+CONTENTS                                                          *neetcode*
+
+  1. Introduction ......................... |neetcode-intro|
+  2. Setup ................................ |neetcode-setup|
+  3. Authentication ....................... |neetcode-auth|
+  4. Commands ............................. |neetcode-commands|
+  5. Mappings ............................. |neetcode-mappings|
+  6. Local test runs ...................... |neetcode-runner|
+  7. Configuration ........................ |neetcode-config|
+
+==============================================================================
+1. INTRODUCTION                                            *neetcode-intro*
+
+Browse the NeetCode topic roadmap as an ASCII graph, solve problems in a real
+buffer, run the visible test cases locally and submit to NeetCode's judge for
+the hidden suite.
+
+Local runs work because NeetCode exposes its own reference solution for every
+problem. Your code and the reference are executed over the same inputs and the
+outputs diffed, so no network round trip is needed to know whether you are
+right on the visible cases.
+
+Requires Neovim 0.10+ and `curl`. Local runs need `python3` and/or a C++17
+compiler.
+
+==============================================================================
+2. SETUP                                                   *neetcode-setup*
+
+>lua
+    require("neetcode").setup({
+      lang = "python",
+      list = "neetcode150",
+    })
+<
+Then run |:NeetCode|.
+
+==============================================================================
+3. AUTHENTICATION                                           *neetcode-auth*
+
+Browsing the roadmap works signed out. Running, submitting and progress sync
+require an account.
+
+NeetCode authenticates with Firebase and has password sign-in disabled, so the
+plugin cannot log in for you. Instead, extract a refresh token from a browser
+where you are already signed in:
+
+  1. Open https://neetcode.io, signed in.
+  2. Run `:NeetCode login` with no argument; it prints a console snippet.
+  3. Paste that snippet into the browser DevTools console.
+  4. `:NeetCode login <the-printed-token>`
+
+The token is written to `stdpath("cache")/neetcode/auth.json` with mode 0600
+and exchanged for short-lived ID tokens as needed.
+
+==============================================================================
+4. COMMANDS                                             *neetcode-commands*
+
+                                                                  *:NeetCode*
+:NeetCode [roadmap]     Open the roadmap. Every problem is reached from here:
+                        pick a topic, then a problem.
+:NeetCode run           Run the visible test cases locally.
+:NeetCode submit        Submit to NeetCode's judge, which has the hidden cases.
+:NeetCode list [name]   blind75 | neetcode150 | neetcode250 | allNC
+                        With no argument, prints the current list. This is the
+                        roadmap's filter; `L` and `H` cycle it in place.
+:NeetCode lang [name]   python | cpp | java | go | ...
+                        With no argument, prints the current language. Only
+                        python and cpp run locally; the rest can only submit.
+:NeetCode sync          Refresh the problem catalog and your progress.
+:NeetCode status        Print current state.
+:NeetCode login [token] Store a refresh token.
+:NeetCode logout        Forget the stored token.
+
+==============================================================================
+5. MAPPINGS                                             *neetcode-mappings*
+
+Roadmap ~
+  h j k l / arrows      Move between topics
+  <CR>                  Open the selected topic
+  L / H                 Next / previous curated list
+  R                     Sync catalog and progress
+  ?                     Help
+  q                     Close
+
+Problem list ~
+  <CR>                  Open the problem
+  t                     Toggle solved
+  o                     Open on LeetCode
+  v                     Open the NeetCode video
+  q                     Close
+
+Solving ~
+  <leader>nr            Run the visible test cases locally
+  <leader>ns            Submit to NeetCode
+  <CR> or <Tab>         Statement window: toggle the hint under the cursor, or
+                        follow the link under it via |vim.ui.open()|. Links in
+                        the prose show as an underlined label with the URL
+                        hidden; where a line holds several, the cursor column
+                        picks which one. Diagrams not drawn inline and the
+                        footer links follow the same key.
+  q                     Close the problem (statement/results windows)
+
+The terminal cursor is hidden while the roadmap has focus; the selected node
+already shows the position. Set `ui.hide_cursor = false` to keep it.
+
+==============================================================================
+6. LOCAL TEST RUNS                                        *neetcode-runner*
+
+NeetCode keeps expected outputs on the server, so a local run gets them by
+executing the site's own reference solution over the same inputs and diffing.
+
+Both `function` and `class` problems run locally, in Python and C++. Supported
+types are integers, floats, booleans, chars, strings, nested vectors/lists of
+those, ListNode / TreeNode (array-encoded, as on LeetCode) including lists of
+lists, and helper classes such as Interval. Problems that mutate their first
+argument and return nothing are handled, as are scalars that identify an
+existing node inside another argument.
+
+Design problems (Min Stack, LRU Cache, Trie, ...) replay their call sequence
+against both your class and the reference class and diff the two lists of
+return values. Encode/decode pairs such as Serialize and Deserialize Binary
+Tree are judged by round-tripping the input through both halves.
+
+Problems that cannot be reproduced locally — SQL, and anything encoding
+arguments by reference such as clone-graph's adjacency list — say so plainly
+and direct you to |:NeetCode| submit, which always works. C++ additionally
+cannot take vector<Interval>, which Python handles.
+
+Extra test cases can be added in a file next to your solution named
+`<solution-file>.tests`, with cases separated by a line containing `---`: >
+
+    nums=[1,2,3,4]
+    target=7
+    ---
+    nums=[0,0]
+    target=0
+<
+==============================================================================
+7. CONFIGURATION                                           *neetcode-config*
+
+Defaults: >lua
+    {
+      list = "neetcode150",
+      lang = "python",
+      solutions_dir = vim.fn.stdpath("data") .. "/neetcode/solutions",
+      cache_dir = vim.fn.stdpath("cache") .. "/neetcode",
+      catalog_max_age = 24 * 60 * 60,
+      timeout = 30,
+      runner = {
+        python = { cmd = { "python3" } },
+        cpp = {
+          cmd = { "c++", "-std=c++17", "-O2", "-o", "{out}", "{source}" },
+          clangd = true,
+        },
+        time_limit = 10,
+      },
+      ui = {
+        node_width = 24,
+        border = "rounded",
+        hide_cursor = true,
+        images = true,
+        image_max_height = 18,
+      },
+      keys = {
+        roadmap = { open = "<CR>", quit = "q", cycle_list = "L", sync = "R" },
+        problem = { run = "<leader>nr", submit = "<leader>ns", quit = "q" },
+      },
+    }
+<
+`runner.cpp.clangd` generates a `.clangd` beside your solutions. It force
+includes `.neetcode/prelude.h` (the standard library and `using namespace std;`)
+for every file, plus a per-problem header carrying that problem's own helper
+types, taken from the definition NeetCode leaves in its starter comment. The
+judge supplies all of this implicitly, so without it a language server reports
+errors on valid solutions. Your solution file is left exactly as NeetCode wrote
+it; nothing is inserted into it.
+
+Helper types are deliberately per problem rather than shared: `Node` is an
+adjacency list in Clone Graph and a random pointer in Copy List with Random
+Pointer, so no single definition is correct for both. Headers are written when a
+problem is opened and `.clangd` is rebuilt from what exists on disk. Nothing
+here reaches the judge, and an existing `.clangd` the plugin did not write is
+left alone.
+
+`ui.images` draws problem diagrams inline through image.nvim, which needs a
+terminal speaking the kitty graphics protocol; the diagram is shown on its own,
+with no caption. Without it a diagram becomes a 🖼 line that <CR> opens
+externally, as the footer links do.
+
+Highlight groups are defined with `default = true` and link to standard groups,
+so a colorscheme can override any of them: `NeetCodeNodeDone`,
+`NeetCodeNodeTodo`, `NeetCodeNodeSelected`, `NeetCodeEdge`, `NeetCodeBarFill`,
+`NeetCodeBarEmpty`, `NeetCodeEasy`, `NeetCodeMedium`, `NeetCodeHard`,
+`NeetCodePass`, `NeetCodeFail`, `NeetCodeWarn`.
+
+vim:tw=78:ts=8:ft=help:norl:
