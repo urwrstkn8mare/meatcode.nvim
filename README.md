@@ -4,7 +4,7 @@ A TUI for the [NeetCode](https://neetcode.io) roadmap. Browse the topic graph,
 solve problems in a real buffer with your own LSP and keymaps, run the visible
 test cases **locally**, and submit to NeetCode's cloud judge for the hidden suite.
 
-```
+```text
                                         ╭──────────────────────╮
                                         │    Arrays & Hash     │
                                         │ ██████████████░░ 8/9 │
@@ -24,6 +24,10 @@ test cases **locally**, and submit to NeetCode's cloud judge for the hidden suit
              │ █████░░░░░░░░░░░ 2/7 │   │ ███████████░░░░░ 4/6 │   │ ████████░░░░░░░ 6/11 │
              ╰──────────────────────╯   ╰──────────────────────╯   ╰──────────────────────╯
 ```
+
+This repo is the result of some careful LLM prompting. I am still happy to
+respond to issues and PRs and understand the codebase enough to maintain it
+until I no longer use it.
 
 ## Why local runs are possible
 
@@ -52,6 +56,7 @@ diffs them, entirely on your machine — no rate limits, instant feedback.
   },
 }
 ```
+
 </details>
 
 <details><summary>packer.nvim</summary>
@@ -59,6 +64,7 @@ diffs them, entirely on your machine — no rate limits, instant feedback.
 ```lua
 use { "samits/neetcode.nvim", config = function() require("neetcode").setup({}) end }
 ```
+
 </details>
 
 Requires Neovim 0.10+ and `curl`. Local runs need `python3` and/or a C++17 compiler.
@@ -152,7 +158,7 @@ Graph and a random pointer in Copy List with Random Pointer. Each problem gets
 the one it actually has, so `node->random` is correctly rejected in Clone Graph
 rather than silently accepted.
 
-```
+```text
 solutions/
 ├── .clangd                 # one fragment per problem, PathMatch-scoped
 └── .neetcode/
@@ -193,7 +199,7 @@ Solutions live at `stdpath("data")/neetcode/solutions/<topic>/<problem>.<ext>`.
 **Extra test cases.** Create `<solution-file>.tests` next to your solution and
 separate cases with a line containing `---`:
 
-```
+```text
 nums=[1,2,3,4]
 target=7
 ---
