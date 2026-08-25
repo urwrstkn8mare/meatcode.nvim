@@ -6,6 +6,7 @@ local lang_info = require("neetcode.lang")
 local progress = require("neetcode.progress")
 local results = require("neetcode.ui.results")
 local runner = require("neetcode.runner")
+local tabs = require("neetcode.ui.tab")
 local util = require("neetcode.util")
 
 --- The solving view: description on the left, a real on-disk solution file on
@@ -452,13 +453,19 @@ end
 local function build_windows()
   vim.cmd("tabnew")
   state.tab = vim.api.nvim_get_current_tabpage()
+  tabs.set(state.tab, state.problem.name)
 
-  -- Left: description.
+  -- Left: description. Reuse the tabnew buffer so it isn't left listed as
+  -- [No Name]/[Scratch] in the tabline.
   state.desc_win = vim.api.nvim_get_current_win()
-  state.desc_buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_win_set_buf(state.desc_win, state.desc_buf)
-  vim.bo[state.desc_buf].filetype = "neetcode-problem"
+  state.desc_buf = vim.api.nvim_get_current_buf()
+  vim.bo[state.desc_buf].buftype = "nofile"
   vim.bo[state.desc_buf].bufhidden = "wipe"
+  vim.bo[state.desc_buf].swapfile = false
+  vim.bo[state.desc_buf].buflisted = false
+  vim.bo[state.desc_buf].filetype = "neetcode-problem"
+  vim.bo[state.desc_buf].modified = false
+  tabs.name_buffer(state.desc_buf, state.problem.name)
   vim.wo[state.desc_win].wrap = true
   vim.wo[state.desc_win].linebreak = true
   vim.wo[state.desc_win].breakindent = true

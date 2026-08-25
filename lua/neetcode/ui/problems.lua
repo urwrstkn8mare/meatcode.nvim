@@ -2,6 +2,7 @@ local catalog = require("neetcode.catalog")
 local config = require("neetcode.config")
 local hl = require("neetcode.ui.highlight")
 local progress = require("neetcode.progress")
+local tabs = require("neetcode.ui.tab")
 local util = require("neetcode.util")
 
 --- Problem list for a single roadmap topic.
@@ -144,6 +145,7 @@ function M.open(pattern, list)
   state.list = list or config.options.list
 
   if is_open() then
+    tabs.name_buffer(state.buf, pattern)
     render()
     return
   end
@@ -151,6 +153,7 @@ function M.open(pattern, list)
   state.buf = vim.api.nvim_create_buf(false, true)
   vim.bo[state.buf].bufhidden = "wipe"
   vim.bo[state.buf].filetype = "neetcode-problems"
+  tabs.name_buffer(state.buf, pattern)
 
   local width = math.min(vim.o.columns - 8, 92)
   local height = math.min(vim.o.lines - 8, 30)

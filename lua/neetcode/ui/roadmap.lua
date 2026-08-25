@@ -4,41 +4,76 @@ local dag = require("neetcode.ui.dag")
 local graph = require("neetcode.catalog.graph")
 local hl = require("neetcode.ui.highlight")
 local progress = require("neetcode.progress")
+local tabs = require("neetcode.ui.tab")
 local util = require("neetcode.util")
 
 --- The roadmap screen: an ASCII rendering of the NeetCode topic DAG with per
 --- topic progress, plus list switching and topic drill-down.
 local M = {}
 
+local HIDDEN_CURSOR = "a:NeetCodeHiddenCursor"
+
 local state = {
-  buf = nil, win = nil, selected = nil, layout = nil, subscribed = false,
+  buf = nil, win = nil, tab = nil, selected = nil, layout = nil, subscribed = false,
   guicursor = nil,
 }
 
---- The roadmap is navigated by moving a highlighted node, so the terminal
---- cursor only adds noise. Blend it away while this window has focus, and put
---- 'guicursor' back on every path out — including a crash-adjacent one.
-local function hide_cursor()
-  if state.guicursor or not config.options.ui.hide_cursor then
-    return
-  end
-  state.guicursor = vim.o.guicursor
-  vim.api.nvim_set_hl(0, "NeetCodeHiddenCursor", { blend = 100 })
-  vim.o.guicursor = "a:NeetCodeHiddenCursor/lCursor"
-end
-
-local function show_cursor()
-  if state.guicursor then
-    vim.o.guicursor = state.guicursor
-    state.guicursor = nil
-  end
-end
-
-local HEADER_ROWS = 3
+local hide_token = 0
 
 local function is_open()
   return state.win and vim.api.nvim_win_is_valid(state.win)
 end
+
+--- The roadmap is navigated by moving a highlighted node, so the terminal
+--- cursor only adds noise. Blend it away while this window has focus, and put
+--- 'guicursor' back on every path out — including a crash-adjacent one.
+---
+--- Moving the cursor (to keep the selected node in view) makes many terminals
+--- un-hide it, so this is re-applied after every move rather than once on enter.
+local function hide_cursor()
+  if not config.options.ui.hide_cursor then
+    return
+  end
+  if not is_open() or vim.api.nvim_get_current_win() ~= state.win then
+    return
+  end
+  vim.api.nvim_set_hl(0, "NeetCodeHiddenCursor", { blend = 100, nocombine = true })
+  if not state.guicursor then
+    local current = vim.o.guicursor
+    state.guicursor = (current ~= "" and current ~= HIDDEN_CURSOR)
+      and current
+      or "n-v-c-sm:block,i-ci-ve:ver25,r-cr-o:hor20"
+  end
+  vim.o.guicursor = HIDDEN_CURSOR
+  -- DEC civis. Neovim already sends this for blend=100, but a CUP (the
+  -- cursor move onto the selected node) often makes the terminal show it
+  -- again; repeating the sequence after the draw keeps it gone.
+  hide_token = hide_token + 1
+  local token = hide_token
+  if vim.fn.has("gui_running") == 0 then
+    vim.schedule(function()
+      if token ~= hide_token then
+        return
+      end
+      if is_open() and vim.api.nvim_get_current_win() == state.win then
+        pcall(vim.api.nvim_ui_send, "\27[?25l")
+      end
+    end)
+  end
+end
+
+local function show_cursor()
+  hide_token = hide_token + 1
+  if state.guicursor then
+    vim.o.guicursor = state.guicursor
+    state.guicursor = nil
+  end
+  if vim.fn.has("gui_running") == 0 then
+    pcall(vim.api.nvim_ui_send, "\27[?25h")
+  end
+end
+
+local HEADER_ROWS = 3
 
 local function summary_line(width)
   local s = progress.summary(config.options.list)
@@ -117,6 +152,7 @@ local function render()
     local row = pos.row + HEADER_ROWS + 2
     pcall(vim.api.nvim_win_set_cursor, state.win, { math.min(row, #lines), math.max(pos.col, 0) })
   end
+  hide_cursor()
 end
 
 --- Move the selection. `dir` is one of "up" | "down" | "left" | "right".
@@ -177,21 +213,38 @@ end
 
 function M.close()
   show_cursor()
+  pcall(vim.api.nvim_del_augroup_by_name, "NeetCodeRoadmapCursor")
+  if state.tab then
+    tabs.clear(state.tab)
+  end
   if is_open() then
     vim.api.nvim_win_close(state.win, true)
   end
-  state.win, state.buf = nil, nil
+  state.win, state.buf, state.tab = nil, nil, nil
 end
 
 local function cursor_autocmds()
   local group = vim.api.nvim_create_augroup("NeetCodeRoadmapCursor", { clear = true })
-  vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter" }, {
+  vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter", "CursorMoved" }, {
     group = group, buffer = state.buf, callback = hide_cursor,
   })
   vim.api.nvim_create_autocmd({ "BufLeave", "WinLeave", "BufWipeout" }, {
     group = group, buffer = state.buf, callback = show_cursor,
   })
   vim.api.nvim_create_autocmd("VimLeavePre", { group = group, callback = show_cursor })
+  -- CmdlineEnter's pattern is the cmdline type, so these are not buffer-local.
+  vim.api.nvim_create_autocmd("CmdlineEnter", {
+    group = group,
+    callback = function()
+      if is_open() and vim.api.nvim_get_current_win() == state.win then
+        show_cursor()
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("CmdlineLeave", {
+    group = group,
+    callback = hide_cursor,
+  })
 end
 
 local function keymaps()
@@ -255,6 +308,7 @@ end
 function M.open()
   if is_open() then
     vim.api.nvim_set_current_win(state.win)
+    hide_cursor()
     return
   end
 
@@ -262,9 +316,12 @@ function M.open()
   progress.load()
   state.selected = state.selected or "Arrays & Hashing"
 
+  state.tab = vim.api.nvim_get_current_tabpage()
   state.buf = vim.api.nvim_create_buf(false, true)
   vim.bo[state.buf].bufhidden = "wipe"
   vim.bo[state.buf].filetype = "neetcode-roadmap"
+  tabs.name_buffer(state.buf, "roadmap")
+  tabs.set(state.tab, "roadmap")
 
   local width = math.min(vim.o.columns - 4, 130)
   local height = vim.o.lines - 6

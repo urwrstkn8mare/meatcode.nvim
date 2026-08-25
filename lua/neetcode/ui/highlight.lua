@@ -22,6 +22,8 @@ local GROUPS = {
   NeetCodeWarn = { link = "DiagnosticWarn" },
   NeetCodeKey = { link = "Special" },
   NeetCodeHeader = { link = "Directory" },
+  -- blend=100 is how the TUI hides the cursor (see :help tui-cursor-shape).
+  NeetCodeHiddenCursor = { blend = 100, nocombine = true },
 
   -- Problem statement.
   NeetCodeBold = { bold = true },
