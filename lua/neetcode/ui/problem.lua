@@ -14,13 +14,64 @@ local util = require("neetcode.util")
 --- results panel underneath.
 local M = {}
 
-local state = {
-  problem = nil, meta = nil, lang = nil,
-  tab = nil, desc_win = nil, code_win = nil, res_win = nil,
-  desc_buf = nil, code_buf = nil, res_buf = nil,
-  path = nil, busy = false, sections = nil, folds = nil, images = nil, links = nil,
-  drawn = {},
-}
+--- One session per open problem tab, keyed by problem id. Opening the same
+--- problem again focuses the existing tab instead of splitting another copy.
+---@type table<string, table>
+local sessions = {}
+
+--- problem ids currently fetching metadata / seeding, so a double <CR> on the
+--- list does not open two tabs of the same question.
+---@type table<string, boolean>
+local opening = {}
+
+local function session_alive(s)
+  return s and s.tab and vim.api.nvim_tabpage_is_valid(s.tab)
+end
+
+local function session_by_win(win)
+  if not win then
+    return nil
+  end
+  for _, s in pairs(sessions) do
+    if s.desc_win == win or s.code_win == win or s.res_win == win then
+      return s
+    end
+  end
+end
+
+local function session_by_tab(tab)
+  if not tab then
+    return nil
+  end
+  for _, s in pairs(sessions) do
+    if s.tab == tab then
+      return s
+    end
+  end
+end
+
+local function current_session()
+  local ok, tab = pcall(vim.api.nvim_get_current_tabpage)
+  if ok then
+    for _, s in pairs(sessions) do
+      if s.tab == tab then
+        return s
+      end
+    end
+  end
+  return session_by_win(vim.api.nvim_get_current_win())
+end
+
+local function focus_session(s)
+  if not session_alive(s) then
+    return false
+  end
+  vim.api.nvim_set_current_tabpage(s.tab)
+  if s.code_win and vim.api.nvim_win_is_valid(s.code_win) then
+    vim.api.nvim_set_current_win(s.code_win)
+  end
+  return true
+end
 
 local function meta_cache_path(id)
   return string.format("%s/meta/%s.json", config.options.cache_dir, id)
@@ -66,24 +117,24 @@ local function user_test_cases(path)
   return out
 end
 
-local function test_cases()
+local function test_cases(s)
   local cases = {}
-  for _, c in ipairs(state.meta.custom_test_cases or {}) do
+  for _, c in ipairs(s.meta.custom_test_cases or {}) do
     table.insert(cases, c)
   end
-  for _, c in ipairs(user_test_cases(state.path)) do
+  for _, c in ipairs(user_test_cases(s.path)) do
     table.insert(cases, c)
   end
   return cases
 end
 
-local function current_code()
-  return table.concat(vim.api.nvim_buf_get_lines(state.code_buf, 0, -1, false), "\n")
+local function current_code(s)
+  return table.concat(vim.api.nvim_buf_get_lines(s.code_buf, 0, -1, false), "\n")
 end
 
-local function save()
-  if state.code_buf and vim.api.nvim_buf_is_valid(state.code_buf) then
-    vim.api.nvim_buf_call(state.code_buf, function()
+local function save(s)
+  if s.code_buf and vim.api.nvim_buf_is_valid(s.code_buf) then
+    vim.api.nvim_buf_call(s.code_buf, function()
       if vim.bo.modified then
         vim.cmd("silent write")
       end
@@ -92,23 +143,24 @@ local function save()
 end
 
 --- Is a problem currently open with a live results panel?
-local function ready()
-  if state.res_buf and vim.api.nvim_buf_is_valid(state.res_buf)
-    and state.code_buf and vim.api.nvim_buf_is_valid(state.code_buf) then
-    return true
+local function ready(s)
+  s = s or current_session()
+  if s and s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf)
+    and s.code_buf and vim.api.nvim_buf_is_valid(s.code_buf) then
+    return s
   end
   util.err("no problem is open — use :NeetCode to pick one")
-  return false
+  return nil
 end
 
 --- Take down whatever image.nvim is currently drawing for us.
-local function clear_images()
-  for _, img in ipairs(state.drawn) do
+local function clear_images(s)
+  for _, img in ipairs(s.drawn or {}) do
     pcall(function()
       img:clear()
     end)
   end
-  state.drawn = {}
+  s.drawn = {}
 end
 
 --- Draw the statement's diagrams inline. image.nvim reserves the rows itself
@@ -123,8 +175,8 @@ local function inline_images()
   return (pcall(require, "image"))
 end
 
-local function render_images()
-  if not config.options.ui.images or vim.tbl_isempty(state.images or {}) then
+local function render_images(s)
+  if not config.options.ui.images or vim.tbl_isempty(s.images or {}) then
     return
   end
   local ok, image = pcall(require, "image")
@@ -132,10 +184,10 @@ local function render_images()
     return
   end
 
-  for row, url in pairs(state.images) do
+  for row, url in pairs(s.images) do
     pcall(image.from_url, url, {
-      window = state.desc_win,
-      buffer = state.desc_buf,
+      window = s.desc_win,
+      buffer = s.desc_buf,
       x = 2,
       y = row,
       with_virtual_padding = true,
@@ -144,7 +196,7 @@ local function render_images()
       if not img then
         return
       end
-      table.insert(state.drawn, img)
+      table.insert(s.drawn, img)
       pcall(function()
         img:render()
       end)
@@ -152,67 +204,69 @@ local function render_images()
   end
 end
 
-local function render_description()
-  clear_images()
-  state.folds, state.images, state.links = description.render(
-    state.desc_buf, state.problem, state.meta, state.sections,
-    { solved = progress.is_solved(state.problem), inline_images = inline_images() })
-  render_images()
+local function render_description(s)
+  clear_images(s)
+  s.folds, s.images, s.links = description.render(
+    s.desc_buf, s.problem, s.meta, s.sections,
+    { solved = progress.is_solved(s.problem), inline_images = inline_images() })
+  render_images(s)
 end
 
 function M.run()
-  if state.busy then
-    return util.notify("already running")
-  end
-  if not ready() then
+  local s = ready()
+  if not s then
     return
   end
-  save()
+  if s.busy then
+    return util.notify("already running")
+  end
+  save(s)
 
-  local cases = test_cases()
-  state.busy = true
-  results.running(state.res_buf, "Running " .. #cases .. " local test case" .. (#cases == 1 and "" or "s"))
+  local cases = test_cases(s)
+  s.busy = true
+  results.running(s.res_buf, "Running " .. #cases .. " local test case" .. (#cases == 1 and "" or "s"))
 
-  runner.run(state.problem.id, current_code(), state.lang, state.meta, cases, function(result)
-    state.busy = false
+  runner.run(s.problem.id, current_code(s), s.lang, s.meta, cases, function(result)
+    s.busy = false
     vim.schedule(function()
-      if state.res_buf and vim.api.nvim_buf_is_valid(state.res_buf) then
-        results.render_run(state.res_buf, result)
+      if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+        results.render_run(s.res_buf, result)
       end
     end)
   end)
 end
 
 function M.submit()
-  if state.busy then
-    return util.notify("already running")
-  end
-  if not ready() then
+  local s = ready()
+  if not s then
     return
   end
-  save()
+  if s.busy then
+    return util.notify("already running")
+  end
+  save(s)
 
-  state.busy = true
-  results.running(state.res_buf, "Submitting to NeetCode")
+  s.busy = true
+  results.running(s.res_buf, "Submitting to NeetCode")
 
-  api.submit(state.problem.id, current_code(), state.lang, function(err, data)
-    state.busy = false
+  api.submit(s.problem.id, current_code(s), s.lang, function(err, data)
+    s.busy = false
     vim.schedule(function()
-      if not (state.res_buf and vim.api.nvim_buf_is_valid(state.res_buf)) then
+      if not (s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf)) then
         return
       end
       if err then
-        return results.render_run(state.res_buf, { ok = false, error = err, cases = {}, passed = 0, total = 0 })
+        return results.render_run(s.res_buf, { ok = false, error = err, cases = {}, passed = 0, total = 0 })
       end
 
-      results.render_submit(state.res_buf, data)
+      results.render_submit(s.res_buf, data)
 
       if data.status and data.status.description == "Accepted" then
-        util.notify(state.problem.name .. " accepted 🎉")
+        util.notify(s.problem.name .. " accepted 🎉")
         -- The backend records the solve itself; mirror it locally so the
         -- roadmap updates without waiting for a refetch.
-        progress.mark(state.problem, function() end)
-        pcall(render_description)
+        progress.mark(s.problem, function() end)
+        pcall(render_description, s)
         pcall(function()
           require("neetcode.ui.roadmap").refresh()
         end)
@@ -223,8 +277,12 @@ end
 
 --- Push the current buffer up to neetcode.io so the web editor matches.
 function M.push()
-  save()
-  api.save_user_code(state.problem.id, state.lang, current_code(), function(err)
+  local s = current_session()
+  if not s then
+    return util.err("no problem is open — use :NeetCode to pick one")
+  end
+  save(s)
+  api.save_user_code(s.problem.id, s.lang, current_code(s), function(err)
     vim.schedule(function()
       if err then
         util.err("could not sync code: " .. err)
@@ -235,20 +293,92 @@ function M.push()
   end)
 end
 
-function M.close()
-  clear_images()
-  if state.tab and vim.api.nvim_tabpage_is_valid(state.tab) then
-    save()
-    vim.cmd("tabclose")
+local function drop_session(s)
+  if not s or not s.problem then
+    return
   end
-  state.tab = nil
+  sessions[s.problem.id] = nil
+  if s.augroup then
+    pcall(vim.api.nvim_del_augroup_by_id, s.augroup)
+    s.augroup = nil
+  end
+end
+
+function M.close(s)
+  s = s or current_session()
+  if not s or s.closing then
+    return
+  end
+  s.closing = true
+  clear_images(s)
+  save(s)
+  local tab = s.tab
+  drop_session(s)
+  if tab and vim.api.nvim_tabpage_is_valid(tab) then
+    if #vim.api.nvim_list_tabpages() > 1 then
+      pcall(vim.cmd, vim.api.nvim_tabpage_get_number(tab) .. "tabclose")
+    else
+      -- Last tab cannot be closed; collapse the layout to an empty buffer.
+      pcall(vim.api.nvim_set_current_tabpage, tab)
+      vim.cmd("enew")
+      local keep = vim.api.nvim_get_current_win()
+      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+        if win ~= keep then
+          pcall(vim.api.nvim_win_close, win, true)
+        end
+      end
+    end
+  end
+end
+
+local watched = false
+local function ensure_watchers()
+  if watched then
+    return
+  end
+  watched = true
+  local group = vim.api.nvim_create_augroup("NeetCodeProblemLifecycle", { clear = true })
+  -- Closing any window in a problem tab tears the whole tab down so you are
+  -- never left with a half-open problem view.
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    callback = function(ev)
+      local win = tonumber(ev.match)
+      local s = session_by_win(win)
+      if not s then
+        local ok, tab = pcall(vim.api.nvim_win_get_tabpage, win)
+        if ok then
+          s = session_by_tab(tab)
+        end
+      end
+      if s then
+        vim.schedule(function()
+          M.close(s)
+        end)
+      end
+    end,
+  })
+  vim.api.nvim_create_autocmd("TabClosed", {
+    group = group,
+    callback = function()
+      vim.schedule(function()
+        for id, s in pairs(sessions) do
+          if not session_alive(s) then
+            s.closing = true
+            clear_images(s)
+            sessions[id] = nil
+          end
+        end
+      end)
+    end,
+  })
 end
 
 
 --- The link under the cursor. A line can hold several -- Find Median links to
 --- both "median" and "mean" -- so the column decides which one.
-local function link_at(row, col)
-  local spans = state.links and state.links[row]
+local function link_at(s, row, col)
+  local spans = s.links and s.links[row]
   if not spans then
     return nil
   end
@@ -266,42 +396,46 @@ end
 
 --- <CR> in the statement: follow the link under the cursor -- an inline link, a
 --- diagram or a footer link -- or toggle the hint accordion under it.
-local function activate()
-  local cursor = vim.api.nvim_win_get_cursor(state.desc_win)
+local function activate(s)
+  local cursor = vim.api.nvim_win_get_cursor(s.desc_win)
   local row, col = cursor[1] - 1, cursor[2]
 
-  local url = link_at(row, col)
+  local url = link_at(s, row, col)
   if url then
     return vim.ui.open(url)
   end
 
-  local section = state.folds and state.folds[row]
+  local section = s.folds and s.folds[row]
   if not section then
     return
   end
   section.open = not section.open
-  render_description()
-  pcall(vim.api.nvim_win_set_cursor, state.desc_win, { row + 1, 0 })
+  render_description(s)
+  pcall(vim.api.nvim_win_set_cursor, s.desc_win, { row + 1, 0 })
 end
 
-local function keymaps()
+local function keymaps(s)
   local keys = config.options.keys.problem
-  for _, buf in ipairs({ state.code_buf, state.desc_buf, state.res_buf }) do
+  for _, buf in ipairs({ s.code_buf, s.desc_buf, s.res_buf }) do
     local function map(lhs, fn, desc)
       vim.keymap.set("n", lhs, fn, { buffer = buf, silent = true, desc = desc })
     end
     map(keys.run, M.run, "neetcode: run local tests")
     map(keys.submit, M.submit, "neetcode: submit to NeetCode")
+    -- A problem tab is one unit: closing a split closes the tab.
+    map("<C-w>c", function() M.close(s) end, "neetcode: close problem")
+    map("<C-w>q", function() M.close(s) end, "neetcode: close problem")
+    map("<C-w>o", function() M.close(s) end, "neetcode: close problem")
   end
 
-  for _, buf in ipairs({ state.desc_buf, state.res_buf }) do
-    vim.keymap.set("n", config.options.keys.problem.quit, M.close,
+  for _, buf in ipairs({ s.desc_buf, s.res_buf }) do
+    vim.keymap.set("n", keys.quit, function() M.close(s) end,
       { buffer = buf, silent = true, desc = "neetcode: close problem" })
   end
 
   for _, lhs in ipairs({ "<CR>", "<Tab>" }) do
-    vim.keymap.set("n", lhs, activate,
-      { buffer = state.desc_buf, silent = true, desc = "neetcode: open hint or diagram" })
+    vim.keymap.set("n", lhs, function() activate(s) end,
+      { buffer = s.desc_buf, silent = true, desc = "neetcode: open hint or diagram" })
   end
 end
 
@@ -424,24 +558,24 @@ end
 
 --- Seed the solution file: prefer code already saved on neetcode.io, else the
 --- official starter code.
-local function seed_file(path, cb)
-  local starter = (state.meta.starterCode or {})[state.lang] or ""
+local function seed_file(s, path, cb)
+  local starter = (s.meta.starterCode or {})[s.lang] or ""
 
-  if state.lang == "cpp" then
-    ensure_clangd(state.problem.id, starter)
+  if s.lang == "cpp" then
+    ensure_clangd(s.problem.id, starter)
   end
 
   if vim.uv.fs_stat(path) then
     return cb()
   end
 
-  api.user_code(state.problem.id, function(err, data)
+  api.user_code(s.problem.id, function(err, data)
     local code = nil
     if not err and type(data) == "table" then
-      local tabs = data.tabs or (data.code and { { code = data.code } })
-      if type(tabs) == "table" and tabs[1] and type(tabs[1].code) == "string" then
-        if data.lang == nil or data.lang == state.lang then
-          code = tabs[1].code
+      local code_tabs = data.tabs or (data.code and { { code = data.code } })
+      if type(code_tabs) == "table" and code_tabs[1] and type(code_tabs[1].code) == "string" then
+        if data.lang == nil or data.lang == s.lang then
+          code = code_tabs[1].code
         end
       end
     end
@@ -450,77 +584,98 @@ local function seed_file(path, cb)
   end)
 end
 
-local function build_windows()
+local function build_windows(s)
   vim.cmd("tabnew")
-  state.tab = vim.api.nvim_get_current_tabpage()
-  tabs.set(state.tab, state.problem.name)
+  s.tab = vim.api.nvim_get_current_tabpage()
+  tabs.set(s.tab, s.problem.name)
+  sessions[s.problem.id] = s
 
   -- Left: description. Reuse the tabnew buffer so it isn't left listed as
   -- [No Name]/[Scratch] in the tabline.
-  state.desc_win = vim.api.nvim_get_current_win()
-  state.desc_buf = vim.api.nvim_get_current_buf()
-  vim.bo[state.desc_buf].buftype = "nofile"
-  vim.bo[state.desc_buf].bufhidden = "wipe"
-  vim.bo[state.desc_buf].swapfile = false
-  vim.bo[state.desc_buf].buflisted = false
-  vim.bo[state.desc_buf].filetype = "neetcode-problem"
-  vim.bo[state.desc_buf].modified = false
-  tabs.name_buffer(state.desc_buf, state.problem.name)
-  vim.wo[state.desc_win].wrap = true
-  vim.wo[state.desc_win].linebreak = true
-  vim.wo[state.desc_win].breakindent = true
+  s.desc_win = vim.api.nvim_get_current_win()
+  s.desc_buf = vim.api.nvim_get_current_buf()
+  vim.bo[s.desc_buf].buftype = "nofile"
+  vim.bo[s.desc_buf].bufhidden = "wipe"
+  vim.bo[s.desc_buf].swapfile = false
+  vim.bo[s.desc_buf].buflisted = false
+  vim.bo[s.desc_buf].filetype = "neetcode-problem"
+  vim.bo[s.desc_buf].modified = false
+  tabs.name_buffer(s.desc_buf, s.problem.name)
+  vim.wo[s.desc_win].wrap = true
+  vim.wo[s.desc_win].linebreak = true
+  vim.wo[s.desc_win].breakindent = true
   -- `breakindent` alone keeps a wrapped line flush with its own indent;
   -- a showbreak string would push every continuation further right.
-  vim.wo[state.desc_win].showbreak = ""
-  vim.wo[state.desc_win].conceallevel = 2
-  vim.wo[state.desc_win].concealcursor = "nvic"
-  vim.wo[state.desc_win].number = false
-  vim.wo[state.desc_win].relativenumber = false
-  vim.wo[state.desc_win].signcolumn = "no"
+  vim.wo[s.desc_win].showbreak = ""
+  vim.wo[s.desc_win].conceallevel = 2
+  vim.wo[s.desc_win].concealcursor = "nvic"
+  vim.wo[s.desc_win].number = false
+  vim.wo[s.desc_win].relativenumber = false
+  vim.wo[s.desc_win].signcolumn = "no"
 
   -- Right: the solution file itself.
-  vim.cmd("botright vsplit " .. vim.fn.fnameescape(state.path))
-  state.code_win = vim.api.nvim_get_current_win()
-  state.code_buf = vim.api.nvim_get_current_buf()
-  vim.bo[state.code_buf].filetype = lang_info.filetype(state.lang)
+  vim.cmd("botright vsplit " .. vim.fn.fnameescape(s.path))
+  s.code_win = vim.api.nvim_get_current_win()
+  s.code_buf = vim.api.nvim_get_current_buf()
+  vim.bo[s.code_buf].filetype = lang_info.filetype(s.lang)
 
   -- Below the solution: results.
   vim.cmd("belowright split")
-  state.res_win = vim.api.nvim_get_current_win()
-  state.res_buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_win_set_buf(state.res_win, state.res_buf)
-  vim.bo[state.res_buf].filetype = "neetcode-results"
-  vim.bo[state.res_buf].bufhidden = "wipe"
-  vim.bo[state.res_buf].modifiable = false
-  vim.wo[state.res_win].number = false
-  vim.wo[state.res_win].relativenumber = false
-  vim.wo[state.res_win].signcolumn = "no"
-  vim.wo[state.res_win].wrap = false
+  s.res_win = vim.api.nvim_get_current_win()
+  s.res_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_win_set_buf(s.res_win, s.res_buf)
+  vim.bo[s.res_buf].filetype = "neetcode-results"
+  vim.bo[s.res_buf].bufhidden = "wipe"
+  vim.bo[s.res_buf].modifiable = false
+  vim.wo[s.res_win].number = false
+  vim.wo[s.res_win].relativenumber = false
+  vim.wo[s.res_win].signcolumn = "no"
+  vim.wo[s.res_win].wrap = false
 
-  vim.api.nvim_win_set_width(state.desc_win, math.floor(vim.o.columns * 0.42))
-  vim.api.nvim_win_set_height(state.res_win, math.min(14, math.floor(vim.o.lines * 0.35)))
+  vim.api.nvim_win_set_width(s.desc_win, math.floor(vim.o.columns * 0.42))
+  vim.api.nvim_win_set_height(s.res_win, math.min(14, math.floor(vim.o.lines * 0.35)))
 
-  vim.api.nvim_set_current_win(state.code_win)
+  vim.api.nvim_set_current_win(s.code_win)
 
   -- Image geometry is in cells, so a resize invalidates it.
+  s.augroup = vim.api.nvim_create_augroup("NeetCodeProblemImages_" .. s.problem.id, { clear = true })
   vim.api.nvim_create_autocmd("VimResized", {
-    group = vim.api.nvim_create_augroup("NeetCodeProblemImages", { clear = true }),
-    buffer = state.desc_buf,
-    callback = render_images,
+    group = s.augroup,
+    buffer = s.desc_buf,
+    callback = function()
+      render_images(s)
+    end,
   })
+  ensure_watchers()
 end
 
 ---@param problem table catalog entry
 ---@param opts table|nil lang
 function M.open(problem, opts)
   opts = opts or {}
+  local existing = sessions[problem.id]
+  if session_alive(existing) then
+    focus_session(existing)
+    return
+  end
+  if opening[problem.id] then
+    return
+  end
+
   local lang = opts.lang or config.options.lang
 
+  opening[problem.id] = true
   util.notify("loading " .. problem.name .. "…")
   fetch_meta(problem.id, function(err, meta)
     vim.schedule(function()
       if err then
+        opening[problem.id] = nil
         return util.err("could not load problem: " .. err)
+      end
+      if session_alive(sessions[problem.id]) then
+        opening[problem.id] = nil
+        focus_session(sessions[problem.id])
+        return
       end
 
       local available = meta.availableLanguages or {}
@@ -531,34 +686,44 @@ function M.open(problem, opts)
         lang = available[1]
       end
 
-      state.problem = problem
-      state.meta = meta
-      state.sections = description.sections(meta.description)
-      state.lang = lang
-      state.path = solution_path(problem, lang)
-      util.mkdirp(vim.fs.dirname(state.path))
+      local s = {
+        problem = problem,
+        meta = meta,
+        sections = description.sections(meta.description),
+        lang = lang,
+        path = solution_path(problem, lang),
+        busy = false,
+        drawn = {},
+      }
+      util.mkdirp(vim.fs.dirname(s.path))
 
-      seed_file(state.path, function()
-        build_windows()
-        render_description()
-        keymaps()
+      seed_file(s, s.path, function()
+        if session_alive(sessions[problem.id]) then
+          opening[problem.id] = nil
+          focus_session(sessions[problem.id])
+          return
+        end
+        build_windows(s)
+        opening[problem.id] = nil
+        render_description(s)
+        keymaps(s)
 
         local keys = config.options.keys.problem
-        vim.bo[state.res_buf].modifiable = true
-        vim.api.nvim_buf_set_lines(state.res_buf, 0, -1, false, {
+        vim.bo[s.res_buf].modifiable = true
+        vim.api.nvim_buf_set_lines(s.res_buf, 0, -1, false, {
           "",
           string.format("  %s  run local tests      %s  submit to NeetCode", keys.run, keys.submit),
           "",
           string.format("  %d visible test case(s) · %d hidden",
-            #test_cases(), meta.test_case_count or 0),
+            #test_cases(s), meta.test_case_count or 0),
           "",
           "  Local runs diff your output against NeetCode's reference solution.",
           "  Submitting runs the full hidden suite in the cloud.",
           "",
           "  <CR> in the statement opens a ▸ hint or a 🖼 diagram.",
         })
-        vim.bo[state.res_buf].modifiable = false
-        hl.apply(state.res_buf, {
+        vim.bo[s.res_buf].modifiable = false
+        hl.apply(s.res_buf, {
           { 1, 0, 80, "NeetCodeKey" },
           { 3, 0, 80, "NeetCodeMuted" },
           { 5, 0, 80, "NeetCodeMuted" },
