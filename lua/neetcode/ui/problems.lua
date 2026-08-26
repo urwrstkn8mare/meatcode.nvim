@@ -12,11 +12,12 @@ local state = { buf = nil, win = nil, rows = {}, pattern = nil, list = nil, subs
 
 local function is_open()
   return state.win and vim.api.nvim_win_is_valid(state.win)
+    and state.buf and vim.api.nvim_buf_is_valid(state.buf)
 end
 
 function M.close()
   if is_open() then
-    vim.api.nvim_win_close(state.win, true)
+    pcall(vim.api.nvim_win_close, state.win, true)
   end
   state.win, state.buf = nil, nil
 end
@@ -173,9 +174,20 @@ function M.open(pattern, list)
   keymaps()
   render()
   pcall(vim.api.nvim_win_set_cursor, state.win, { 3, 0 })
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(state.win),
+    once = true,
+    callback = function()
+      state.win, state.buf = nil, nil
+    end,
+  })
   if not state.subscribed then
     state.subscribed = true
-    progress.on_update(function() vim.schedule(render) end)
+    progress.on_update(function()
+      vim.schedule(function()
+        pcall(render)
+      end)
+    end)
   end
 end
 

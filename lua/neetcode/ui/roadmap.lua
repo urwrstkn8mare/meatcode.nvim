@@ -22,6 +22,7 @@ local hide_token = 0
 
 local function is_open()
   return state.win and vim.api.nvim_win_is_valid(state.win)
+    and state.buf and vim.api.nvim_buf_is_valid(state.buf)
 end
 
 --- The roadmap is navigated by moving a highlighted node, so the terminal
@@ -218,7 +219,7 @@ function M.close()
     tabs.clear(state.tab)
   end
   if is_open() then
-    vim.api.nvim_win_close(state.win, true)
+    pcall(vim.api.nvim_win_close, state.win, true)
   end
   state.win, state.buf, state.tab = nil, nil, nil
 end
@@ -232,6 +233,21 @@ local function cursor_autocmds()
     group = group, buffer = state.buf, callback = show_cursor,
   })
   vim.api.nvim_create_autocmd("VimLeavePre", { group = group, callback = show_cursor })
+  -- The float dies with its tab (e.g. a problem tab closing). Restore the
+  -- cursor and drop stale handles so the next :NeetCode can reopen cleanly.
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    callback = function(ev)
+      if tonumber(ev.match) ~= state.win then
+        return
+      end
+      show_cursor()
+      if state.tab then
+        tabs.clear(state.tab)
+      end
+      state.win, state.buf, state.tab = nil, nil, nil
+    end,
+  })
   -- CmdlineEnter's pattern is the cmdline type, so these are not buffer-local.
   vim.api.nvim_create_autocmd("CmdlineEnter", {
     group = group,
@@ -350,8 +366,16 @@ function M.open()
   -- session; render() is a no-op while the window is closed.
   if not state.subscribed then
     state.subscribed = true
-    catalog.on_update(function() vim.schedule(render) end)
-    progress.on_update(function() vim.schedule(render) end)
+    catalog.on_update(function()
+      vim.schedule(function()
+        pcall(render)
+      end)
+    end)
+    progress.on_update(function()
+      vim.schedule(function()
+        pcall(render)
+      end)
+    end)
   end
 
   -- Progress is cheap to refetch and keeps the roadmap honest across devices.

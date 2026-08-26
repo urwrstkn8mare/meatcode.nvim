@@ -39,17 +39,6 @@ local function session_by_win(win)
   end
 end
 
-local function session_by_tab(tab)
-  if not tab then
-    return nil
-  end
-  for _, s in pairs(sessions) do
-    if s.tab == tab then
-      return s
-    end
-  end
-end
-
 local function current_session()
   local ok, tab = pcall(vim.api.nvim_get_current_tabpage)
   if ok then
@@ -153,6 +142,53 @@ local function ready(s)
   return nil
 end
 
+--- image.nvim refuses from_url until setup() has run. Listing it as a
+--- lazy.nvim dependency does not call setup, so we do that ourselves when
+--- the user never configured it. `false` means we tried and it is unusable.
+local image_mod ---@type table|false|nil
+
+local function get_image()
+  if image_mod == false then
+    return nil
+  end
+  if image_mod then
+    return image_mod
+  end
+  if not config.options.ui.images then
+    image_mod = false
+    return nil
+  end
+  local ok, image = pcall(require, "image")
+  if not ok or type(image) ~= "table" or type(image.from_url) ~= "function" then
+    image_mod = false
+    return nil
+  end
+  -- clear() is a cheap setup-guard: missing ids are a no-op on a live backend,
+  -- and the first successful call also loads kitty/ueberzug so tmux/magick
+  -- failures show up here instead of as a blank hole in the statement.
+  if not pcall(image.clear, "neetcode-setup-probe") then
+    local setup_ok = pcall(image.setup, {
+      hijack_file_patterns = {},
+      integrations = {
+        markdown = { enabled = false },
+        neorg = { enabled = false },
+        typst = { enabled = false },
+        html = { enabled = false },
+        css = { enabled = false },
+        org = { enabled = false },
+        asciidoc = { enabled = false },
+        syslang = { enabled = false },
+      },
+    })
+    if not setup_ok or not pcall(image.clear, "neetcode-setup-probe") then
+      image_mod = false
+      return nil
+    end
+  end
+  image_mod = image
+  return image
+end
+
 --- Take down whatever image.nvim is currently drawing for us.
 local function clear_images(s)
   for _, img in ipairs(s.drawn or {}) do
@@ -161,26 +197,30 @@ local function clear_images(s)
     end)
   end
   s.drawn = {}
+  local image = image_mod ~= false and image_mod or nil
+  if image and s.desc_buf and vim.api.nvim_buf_is_valid(s.desc_buf) then
+    for _, img in ipairs(image.get_images({ buffer = s.desc_buf }) or {}) do
+      pcall(function()
+        img:clear()
+      end)
+    end
+  end
 end
 
 --- Draw the statement's diagrams inline. image.nvim reserves the rows itself
 --- through `with_virtual_padding`, so the surrounding text is never covered.
 --- Anything missing here -- the plugin, a capable terminal, ImageMagick --
 --- just leaves the 🖼 line, which still opens the diagram on <CR>.
---- Can diagrams be drawn in place? Decides whether they get a label instead.
-local function inline_images()
-  if not config.options.ui.images then
-    return false
-  end
-  return (pcall(require, "image"))
-end
-
 local function render_images(s)
-  if not config.options.ui.images or vim.tbl_isempty(s.images or {}) then
+  if vim.tbl_isempty(s.images or {}) then
     return
   end
-  local ok, image = pcall(require, "image")
-  if not ok then
+  local image = get_image()
+  if not image then
+    return
+  end
+  if not (s.desc_win and vim.api.nvim_win_is_valid(s.desc_win)
+      and s.desc_buf and vim.api.nvim_buf_is_valid(s.desc_buf)) then
     return
   end
 
@@ -190,15 +230,25 @@ local function render_images(s)
       buffer = s.desc_buf,
       x = 2,
       y = row,
+      height = config.options.ui.image_max_height,
       with_virtual_padding = true,
-      max_height = config.options.ui.image_max_height,
+      inline = true,
+      namespace = "neetcode",
     }, function(img)
-      if not img then
-        return
-      end
-      table.insert(s.drawn, img)
-      pcall(function()
-        img:render()
+      vim.schedule(function()
+        if not img then
+          return
+        end
+        if not (s.desc_buf and vim.api.nvim_buf_is_valid(s.desc_buf)) then
+          pcall(function()
+            img:clear()
+          end)
+          return
+        end
+        table.insert(s.drawn, img)
+        pcall(function()
+          img:render()
+        end)
       end)
     end)
   end
@@ -208,7 +258,7 @@ local function render_description(s)
   clear_images(s)
   s.folds, s.images, s.links = description.render(
     s.desc_buf, s.problem, s.meta, s.sections,
-    { solved = progress.is_solved(s.problem), inline_images = inline_images() })
+    { solved = progress.is_solved(s.problem) })
   render_images(s)
 end
 
@@ -310,8 +360,8 @@ function M.close(s)
     return
   end
   s.closing = true
-  clear_images(s)
-  save(s)
+  pcall(clear_images, s)
+  pcall(save, s)
   local tab = s.tab
   drop_session(s)
   if tab and vim.api.nvim_tabpage_is_valid(tab) then
@@ -320,7 +370,7 @@ function M.close(s)
     else
       -- Last tab cannot be closed; collapse the layout to an empty buffer.
       pcall(vim.api.nvim_set_current_tabpage, tab)
-      vim.cmd("enew")
+      pcall(vim.cmd, "enew")
       local keep = vim.api.nvim_get_current_win()
       for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
         if win ~= keep then
@@ -331,6 +381,14 @@ function M.close(s)
   end
 end
 
+--- Floating windows (LSP hover, signature help, the roadmap, image.nvim,
+--- nvim-notify, completion docs, …) share a problem tab but are not part of
+--- the three-pane layout. Closing one must not take the problem down with it.
+local function is_float(win)
+  local ok, cfg = pcall(vim.api.nvim_win_get_config, win)
+  return ok and cfg.relative ~= nil and cfg.relative ~= ""
+end
+
 local watched = false
 local function ensure_watchers()
   if watched then
@@ -338,22 +396,22 @@ local function ensure_watchers()
   end
   watched = true
   local group = vim.api.nvim_create_augroup("NeetCodeProblemLifecycle", { clear = true })
-  -- Closing any window in a problem tab tears the whole tab down so you are
-  -- never left with a half-open problem view.
+  -- Closing a layout pane (description / code / results) tears the whole tab
+  -- down so you are never left with a half-open problem view. Other windows
+  -- in the tab are ignored — see is_float().
   vim.api.nvim_create_autocmd("WinClosed", {
     group = group,
     callback = function(ev)
       local win = tonumber(ev.match)
-      local s = session_by_win(win)
-      if not s then
-        local ok, tab = pcall(vim.api.nvim_win_get_tabpage, win)
-        if ok then
-          s = session_by_tab(tab)
-        end
+      if not win or is_float(win) then
+        return
       end
-      if s then
+      local s = session_by_win(win)
+      if s and not s.closing then
         vim.schedule(function()
-          M.close(s)
+          if not s.closing then
+            M.close(s)
+          end
         end)
       end
     end,
@@ -365,7 +423,7 @@ local function ensure_watchers()
         for id, s in pairs(sessions) do
           if not session_alive(s) then
             s.closing = true
-            clear_images(s)
+            pcall(clear_images, s)
             sessions[id] = nil
           end
         end
@@ -643,7 +701,11 @@ local function build_windows(s)
     group = s.augroup,
     buffer = s.desc_buf,
     callback = function()
-      render_images(s)
+      for _, img in ipairs(s.drawn or {}) do
+        pcall(function()
+          img:render()
+        end)
+      end
     end,
   })
   ensure_watchers()

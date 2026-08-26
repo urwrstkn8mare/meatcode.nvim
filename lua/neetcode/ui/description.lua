@@ -52,10 +52,6 @@ local function delink(line)
   return table.concat(out), spans
 end
 
---- Whether diagrams will be drawn in place, which decides whether their anchor
---- row needs a visible label.
-local inline_images = false
-
 -- ------------------------------------------------------------------- text
 
 local ENTITIES = {
@@ -249,22 +245,14 @@ local function render_md(text, lines, marks, prefix, tight)
 
     local trimmed = vim.trim(line)
 
-    -- Images are the one thing we cannot draw. Offer them as an openable line
-    -- rather than leaking the raw markdown into the middle of the statement.
+    -- Images hang from this row. image.nvim (when it works) covers the label
+    -- with the diagram via virtual padding; otherwise <CR> still opens it.
     local alt, url = trimmed:match("^!%[(.-)%]%((.-)%)$")
     if url and url ~= "" then
       gap()
-      if inline_images then
-        -- The diagram speaks for itself; it only needs a row to hang from, and
-        -- the gap above it will do if one was just emitted.
-        if #lines == 0 or lines[#lines] ~= "" then
-          table.insert(lines, "")
-        end
-      else
-        local label = string.format("%s🖼  %s", prefix, alt ~= "" and alt or "open diagram")
-        table.insert(lines, label)
-        table.insert(marks, { #lines - 1, 0, { end_col = #label, hl_group = "NeetCodeFold" } })
-      end
+      local label = string.format("%s🖼  %s", prefix, alt ~= "" and alt or "open diagram")
+      table.insert(lines, label)
+      table.insert(marks, { #lines - 1, 0, { end_col = #label, hl_group = "NeetCodeFold" } })
       images[#lines - 1] = url
       add_link(#lines - 1, 0, #(lines[#lines]) + 1, url)
       seen, pending = true, true
@@ -347,13 +335,12 @@ end
 ---@param problem table catalog entry
 ---@param meta table problem metadata
 ---@param sections table[] from M.sections
----@param opts table|nil {solved = boolean, inline_images = boolean}
+---@param opts table|nil {solved = boolean}
 ---@return table fold_rows, table image_rows, table link_rows
 function M.render(buf, problem, meta, sections, opts)
   local lines, marks = {}, {}
   local fold_rows = {}
   images, links = {}, {}
-  inline_images = (opts or {}).inline_images == true
 
   -- Header: the title carries the page, so give it weight and breathing room.
   table.insert(lines, "")
