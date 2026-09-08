@@ -48,7 +48,7 @@ use { "samits/neetcode.nvim", config = function() require("neetcode").setup({}) 
 
 </details>
 
-Requires Neovim 0.10+ and `curl`. Local runs need `python3` and/or a C++17 compiler.
+Requires Neovim 0.10+ and `curl`. Local runs need `python3` and/or a C++ compiler.
 
 ## Log in
 
@@ -127,8 +127,10 @@ definition of `ListNode` / `TreeNode` / `Node` / `Interval` — its judge suppli
 all of them. A language server does not, so valid solutions light up red.
 
 So the plugin generates a `.clangd` beside your solutions (`runner.cpp.clangd`).
-Your solution file is left exactly as NeetCode wrote it — nothing is inserted
-into it, and nothing extra is submitted.
+Compile flags — including `-std` — are taken from `runner.cpp.cmd`, so clangd
+parses with the same language mode the local runner compiles with. Your
+solution file is left exactly as NeetCode wrote it — nothing is inserted into
+it, and nothing extra is submitted.
 
 The generated config force-includes a shared `prelude.h` holding the standard
 library and `using namespace std;`, plus a **per-problem header holding that
@@ -150,8 +152,9 @@ solutions/
 
 Headers are written when you open a problem and `.clangd` is rebuilt from
 whatever exists on disk, so it stays consistent. An existing `.clangd` the
-plugin did not write is left alone. Measured over seeded solutions,
-`clangd --check` goes from 1–4 errors per file to zero.
+plugin did not write is left alone only if it already matches `runner.cpp.cmd`
+(same `-std` / `-stdlib`); a stale or conflicting one is overwritten. Measured
+over seeded solutions, `clangd --check` goes from 1–4 errors per file to zero.
 | `?` | Help |
 | `q` | Close |
 
@@ -239,7 +242,7 @@ require("neetcode").setup({
   timeout = 30,
   runner = {
     python = { cmd = { "python3" } },
-    cpp = { cmd = { "c++", "-std=c++17", "-O2", "-o", "{out}", "{source}" } },
+    cpp = { cmd = { "c++", "-std=c++23", "-O2", "-o", "{out}", "{source}" } },
     time_limit = 10,
   },
   ui = { node_width = 24, border = "rounded" },

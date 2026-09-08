@@ -152,7 +152,7 @@ Defaults: >lua
       runner = {
         python = { cmd = { "python3" } },
         cpp = {
-          cmd = { "c++", "-std=c++17", "-O2", "-o", "{out}", "{source}" },
+          cmd = { "c++", "-std=c++23", "-O2", "-o", "{out}", "{source}" },
           clangd = true,
         },
         time_limit = 10,
@@ -170,20 +170,22 @@ Defaults: >lua
       },
     }
 <
-`runner.cpp.clangd` generates a `.clangd` beside your solutions. It force
-includes `.neetcode/prelude.h` (the standard library and `using namespace std;`)
-for every file, plus a per-problem header carrying that problem's own helper
-types, taken from the definition NeetCode leaves in its starter comment. The
-judge supplies all of this implicitly, so without it a language server reports
-errors on valid solutions. Your solution file is left exactly as NeetCode wrote
-it; nothing is inserted into it.
+`runner.cpp.clangd` generates a `.clangd` beside your solutions. Compile flags
+(including `-std`) are taken from `runner.cpp.cmd`. It force includes
+`.neetcode/prelude.h` (the standard library and `using namespace std;`) for
+every file, plus a per-problem header carrying that problem's own helper types,
+taken from the definition NeetCode leaves in its starter comment. The judge
+supplies all of this implicitly, so without it a language server reports errors
+on valid solutions. Your solution file is left exactly as NeetCode wrote it;
+nothing is inserted into it.
 
 Helper types are deliberately per problem rather than shared: `Node` is an
 adjacency list in Clone Graph and a random pointer in Copy List with Random
 Pointer, so no single definition is correct for both. Headers are written when a
 problem is opened and `.clangd` is rebuilt from what exists on disk. Nothing
-here reaches the judge, and an existing `.clangd` the plugin did not write is
-left alone.
+here reaches the judge. An existing `.clangd` the plugin did not write is left
+alone only if it already matches `runner.cpp.cmd`; a stale or conflicting one
+is overwritten.
 
 `ui.images` draws problem diagrams inline through image.nvim, which needs a
 terminal speaking the kitty graphics protocol; the diagram is shown on its own,

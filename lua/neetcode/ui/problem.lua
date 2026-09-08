@@ -515,18 +515,99 @@ local function support_dir()
   return config.options.solutions_dir .. "/.neetcode"
 end
 
+--- Quote a YAML scalar when it isn't a plain token (paths with spaces, etc.).
+local function yaml_scalar(s)
+  if s:match("^%-?[%w_./+=]+$") then
+    return s
+  end
+  return "'" .. s:gsub("'", "''") .. "'"
+end
+
+--- Language-server flags from `runner.cpp.cmd`: drop the compiler, `-o` /
+--- `{out}` / `{source}`, and the input file, so clangd uses the same language
+--- mode the local runner compiles with.
+local function clangd_from_cmd(cmd)
+  cmd = cmd or {}
+  local compiler = cmd[1]
+  local flags = {}
+  local skip_next = false
+  for i, arg in ipairs(cmd) do
+    if i == 1 or skip_next then
+      skip_next = false
+    elseif arg == "-o" then
+      skip_next = true
+    elseif arg:find("{out}", 1, true) or arg:find("{source}", 1, true) then
+      -- combined -o{out}, or the placeholders themselves
+    elseif arg:match("%.[cC]$")
+      or arg:match("%.[cC][cC]$")
+      or arg:match("%.[cC][pP][pP]$")
+      or arg:match("%.[cC][xX][xX]$")
+    then
+      -- source file given as a literal
+    else
+      table.insert(flags, arg)
+    end
+  end
+  return compiler, flags
+end
+
+local function clangd_path()
+  return config.options.solutions_dir .. "/.clangd"
+end
+
+--- Language-mode flags clangd must see to match the runner (std, stdlib, …).
+local function clangd_lang_flags(flags)
+  local out = {}
+  for _, flag in ipairs(flags or {}) do
+    if flag:match("^%-std=") or flag:match("^%-%-std=") or flag:match("^%-stdlib=") then
+      table.insert(out, flag)
+    end
+  end
+  return out
+end
+
+--- A third-party `.clangd` is incorrect when it would parse with a different
+--- language mode than `runner.cpp.cmd`.
+local function clangd_disagrees_with_cmd(existing)
+  local _, flags = clangd_from_cmd(config.options.runner.cpp.cmd)
+  local want_std
+  for _, flag in ipairs(clangd_lang_flags(flags)) do
+    if not existing:find(flag, 1, true) then
+      return true
+    end
+    want_std = want_std or flag:match("%-std=.+")
+  end
+  -- Leftover conflicting `-std=` (e.g. c++17 still present while cmd is c++23).
+  if want_std then
+    for std in existing:gmatch("%-std=[%w%+%d]+") do
+      if std ~= want_std then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 --- Rebuild `.clangd` from whatever per-problem headers exist on disk, so the
 --- file stays consistent however many problems have been opened.
-local function rebuild_clangd()
+local function clangd_body()
   local dir = support_dir()
+  local compiler, flags = clangd_from_cmd(config.options.runner.cpp.cmd)
   local fragments = {
     "# " .. CLANGD_MARKER .. " -- delete this file to opt out.",
     "CompileFlags:",
-    "  Add:",
-    "    - -std=c++17",
-    "    - -include",
-    "    - " .. dir .. "/prelude.h",
   }
+  if compiler and compiler ~= "" then
+    table.insert(fragments, "  Compiler: " .. yaml_scalar(compiler))
+  end
+  table.insert(fragments, "  Add:")
+  for _, flag in ipairs(flags) do
+    table.insert(fragments, "    - " .. yaml_scalar(flag))
+  end
+  vim.list_extend(fragments, {
+    "    - -include",
+    "    - " .. yaml_scalar(dir .. "/prelude.h"),
+  })
 
   local entries = vim.fn.glob(dir .. "/*.h", false, true)
   table.sort(entries)
@@ -543,12 +624,19 @@ local function rebuild_clangd()
         "CompileFlags:",
         "  Add:",
         "    - -include",
-        "    - " .. path,
+        "    - " .. yaml_scalar(path),
       })
     end
   end
 
-  util.write_file(dir .. "/../.clangd", table.concat(fragments, "\n") .. "\n")
+  return table.concat(fragments, "\n") .. "\n"
+end
+
+local function rebuild_clangd(existing)
+  local body = clangd_body()
+  if existing ~= body then
+    util.write_file(clangd_path(), body)
+  end
 end
 
 --- Write a header holding one problem's own helper types, if it declares any.
@@ -594,9 +682,13 @@ local function ensure_clangd(problem_id, starter)
     return
   end
 
-  local existing = util.read_file(config.options.solutions_dir .. "/.clangd")
-  if existing and not existing:find(CLANGD_MARKER, 1, true) then
-    -- Someone else's configuration; leave it be.
+  local existing = util.read_file(clangd_path())
+  -- A third-party `.clangd` that already matches `runner.cpp.cmd` is left
+  -- alone. Ours, a missing file, or one with the wrong language mode is not.
+  if existing
+    and not existing:find(CLANGD_MARKER, 1, true)
+    and not clangd_disagrees_with_cmd(existing)
+  then
     return
   end
 
@@ -611,7 +703,7 @@ local function ensure_clangd(problem_id, starter)
 
   write_types(dir, problem_id, starter)
   backfill_types(dir)
-  rebuild_clangd()
+  rebuild_clangd(existing)
 end
 
 --- Seed the solution file: prefer code already saved on neetcode.io, else the

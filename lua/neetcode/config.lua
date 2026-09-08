@@ -29,6 +29,7 @@ local defaults = {
 			-- Drop a `.clangd` beside your solutions that force-includes a header
 			-- supplying the #includes and node types NeetCode's judge provides
 			-- implicitly, so a language server stops flagging valid solutions.
+			-- Compile flags (including `-std`) are taken from `cmd` above.
 			-- Nothing is added to your file and nothing extra is submitted.
 			clangd = true,
 		},
