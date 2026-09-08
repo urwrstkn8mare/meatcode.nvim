@@ -695,11 +695,12 @@ local function ensure_clangd(problem_id, starter)
   local dir = support_dir()
   util.mkdirp(dir)
 
-  local base = util.read_file(harness_file("cpp_prelude.h"))
-  if not base then
+  local comments = util.read_file(harness_file("cpp_prelude.h"))
+  local stdlib = util.read_file(harness_file("cpp_stdlib.h"))
+  if not comments or not stdlib then
     return
   end
-  util.write_file(dir .. "/prelude.h", base)
+  util.write_file(dir .. "/prelude.h", comments .. "\n" .. stdlib .. "\nusing namespace std;\n")
 
   write_types(dir, problem_id, starter)
   backfill_types(dir)

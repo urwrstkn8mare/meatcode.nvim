@@ -199,6 +199,8 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode)
 
   local runtime = util.read_file(harness_dir() .. "/cpp_runtime.h")
   util.write_file(dir .. "/cpp_runtime.h", runtime)
+  local stdlib = util.read_file(harness_dir() .. "/cpp_stdlib.h")
+  util.write_file(dir .. "/cpp_stdlib.h", stdlib)
 
   local bin = dir .. "/run"
   local compile = {}

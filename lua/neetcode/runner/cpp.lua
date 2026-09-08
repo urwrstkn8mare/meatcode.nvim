@@ -16,35 +16,7 @@ local SCALARS = {
 }
 
 local PRELUDE = [[
-#include <algorithm>
-#include <array>
-#include <bitset>
-#include <chrono>
-#include <climits>
-#include <cmath>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <deque>
-#include <fstream>
-#include <functional>
-#include <iostream>
-#include <iterator>
-#include <limits>
-#include <list>
-#include <map>
-#include <numeric>
-#include <queue>
-#include <set>
-#include <sstream>
-#include <stack>
-#include <string>
-#include <tuple>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
-#include <vector>
+#include "cpp_stdlib.h"
 using namespace std;
 
 #include "cpp_runtime.h"
