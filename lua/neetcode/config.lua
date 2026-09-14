@@ -59,6 +59,8 @@ local defaults = {
 		problem = {
 			run = "<leader>nr",
 			submit = "<leader>ns",
+			tests = "<leader>nt",
+			test_failed = "<leader>na",
 			quit = "q",
 		},
 	},

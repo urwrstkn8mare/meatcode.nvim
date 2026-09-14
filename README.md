@@ -59,8 +59,9 @@ no way to log in from the terminal directly. Instead you hand over a Firebase
 refresh token once:
 
 1. Open <https://neetcode.io> in a browser, signed in.
-2. Open the DevTools console and run the snippet printed by `:NeetCode login`.
-3. `:NeetCode login <paste-token>`
+2. Run `:NeetCode login` and follow the browser storage instructions in the window.
+   No script is required. Alternatively, press `y` to copy the console script.
+3. Press `p` in the login window and paste the token into the prompt.
 
 The token is stored at `stdpath("cache")/neetcode/auth.json` with `0600`
 permissions and is exchanged for a short-lived ID token as needed. Nothing is
@@ -180,7 +181,17 @@ LSP, treesitter, formatters and keymaps all work normally.
 
 Solutions live at `stdpath("data")/neetcode/solutions/<topic>/<problem>.<ext>`.
 
-**Extra test cases.** Create `<solution-file>.tests` next to your solution and
+**Edit test cases.** Run `:NeetCode tests` (`<leader>nt`) to edit the local suite.
+Add cases separated by a line containing `---`, or delete a whole case to remove
+it. Use `:w` to save and `:q` to close. Local runs also save pending edits.
+`:NeetCode test-failed` (`<leader>na`) adds and saves the latest failed submission
+input, skipping duplicates. These cases only affect local runs.
+
+The edited suite is stored in `<solution-file>.cases`. Initially it includes the
+visible cases and any legacy `.tests` extras; once saved, it replaces that combined
+suite. An empty `.cases` file runs no cases. Delete it to restore the default suite.
+
+**Legacy extra test cases.** Create `<solution-file>.tests` next to your solution and
 separate cases with a line containing `---`:
 
 ```text

@@ -13,6 +13,8 @@ local SUBCOMMANDS = {
   lang = function(args) require("neetcode").set_lang(args[1]) end,
   run = function() require("neetcode").run() end,
   submit = function() require("neetcode").submit() end,
+  tests = function() require("neetcode.ui.problem").tests() end,
+  ["test-failed"] = function() require("neetcode.ui.problem").test_failed() end,
 }
 
 vim.api.nvim_create_user_command("NeetCode", function(cmd)

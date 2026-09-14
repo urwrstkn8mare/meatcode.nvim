@@ -48,9 +48,9 @@ plugin cannot log in for you. Instead, extract a refresh token from a browser
 where you are already signed in:
 
   1. Open https://neetcode.io, signed in.
-  2. Run `:NeetCode login` with no argument; it prints a console snippet.
-  3. Paste that snippet into the browser DevTools console.
-  4. `:NeetCode login <the-printed-token>`
+  2. Run `:NeetCode login`; follow the browser storage instructions shown.
+     Alternatively, press y to copy the script for the browser console.
+  3. Press p in the login window and paste the token into the prompt.
 
 The token is written to `stdpath("cache")/neetcode/auth.json` with mode 0600
 and exchanged for short-lived ID tokens as needed.
@@ -62,6 +62,8 @@ and exchanged for short-lived ID tokens as needed.
 :NeetCode [roadmap]     Open the roadmap. Every problem is reached from here:
                         pick a topic, then a problem.
 :NeetCode run           Run the visible test cases locally.
+:NeetCode tests         Edit the local suite; add/remove cases separated by ---.
+:NeetCode test-failed   Save the latest failed submission input to local tests.
 :NeetCode submit        Submit to NeetCode's judge, which has the hidden cases.
 :NeetCode list [name]   blind75 | neetcode150 | neetcode250 | allNC
                         With no argument, prints the current list. This is the
@@ -129,7 +131,16 @@ arguments by reference such as clone-graph's adjacency list — say so plainly
 and direct you to |:NeetCode| submit, which always works. C++ additionally
 cannot take vector<Interval>, which Python handles.
 
-Extra test cases can be added in a file next to your solution named
+Use :NeetCode tests (<leader>nt) to add/remove local cases in an editor. Save
+with :w and close with :q. Local runs also save pending edits. The full suite
+is stored beside your solution as <solution-file>.cases, initially seeded
+with visible cases and legacy .tests extras. An empty suite runs no cases;
+delete the .cases file to restore the defaults. Changes affect local runs only.
+
+Use :NeetCode test-failed (<leader>na) to add and save the latest failed
+submission input. Duplicate inputs are skipped.
+
+Legacy extra test cases can be added in a file next to your solution named
 `<solution-file>.tests`, with cases separated by a line containing `---`: >
 
     nums=[1,2,3,4]

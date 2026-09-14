@@ -7,6 +7,7 @@ local progress = require("neetcode.progress")
 local results = require("neetcode.ui.results")
 local runner = require("neetcode.runner")
 local tabs = require("neetcode.ui.tab")
+local tests = require("neetcode.ui.tests")
 local util = require("neetcode.util")
 
 --- The solving view: description on the left, a real on-disk solution file on
@@ -91,30 +92,9 @@ local function solution_path(problem, lang)
 end
 
 --- Extra test cases the user has written, stored alongside the solution.
-local function user_test_cases(path)
-  local raw = util.read_file(path .. ".tests")
-  if not raw then
-    return {}
-  end
-  local out = {}
-  for _, blockdata in ipairs(vim.split(raw, "\n---\n", { plain = true })) do
-    local trimmed = vim.trim(blockdata)
-    if trimmed ~= "" then
-      table.insert(out, trimmed)
-    end
-  end
-  return out
-end
-
 local function test_cases(s)
-  local cases = {}
-  for _, c in ipairs(s.meta.custom_test_cases or {}) do
-    table.insert(cases, c)
-  end
-  for _, c in ipairs(user_test_cases(s.path)) do
-    table.insert(cases, c)
-  end
-  return cases
+  tests.save(s.path)
+  return tests.read(s.path, s.meta.custom_test_cases)
 end
 
 local function current_code(s)
@@ -262,6 +242,18 @@ local function render_description(s)
   render_images(s)
 end
 
+function M.tests()
+  local s = ready()
+  if s then tests.open(s.path, s.meta.custom_test_cases) end
+end
+
+function M.test_failed()
+  local s = ready()
+  if not s then return end
+  if not s.failed_input then return util.err("no failed submission input available") end
+  tests.open(s.path, s.meta.custom_test_cases, s.failed_input)
+end
+
 function M.run()
   local s = ready()
   if not s then
@@ -309,6 +301,13 @@ function M.submit()
         return results.render_run(s.res_buf, { ok = false, error = err, cases = {}, passed = 0, total = 0 })
       end
 
+      local failing = data.last_executed_test_case
+      s.failed_input = nil
+      if (not data.status or data.status.description ~= "Accepted")
+        and type(failing) == "table" and type(failing.input) == "string"
+        and vim.trim(failing.input) ~= "" then
+        s.failed_input = failing.input
+      end
       results.render_submit(s.res_buf, data)
 
       if data.status and data.status.description == "Accepted" then
@@ -480,6 +479,8 @@ local function keymaps(s)
     end
     map(keys.run, M.run, "neetcode: run local tests")
     map(keys.submit, M.submit, "neetcode: submit to NeetCode")
+    map(keys.tests, M.tests, "neetcode: edit test cases")
+    map(keys.test_failed, M.test_failed, "neetcode: add failed submission case")
     -- A problem tab is one unit: closing a split closes the tab.
     map("<C-w>c", function() M.close(s) end, "neetcode: close problem")
     map("<C-w>q", function() M.close(s) end, "neetcode: close problem")
@@ -868,6 +869,7 @@ function M.open(problem, opts)
         vim.api.nvim_buf_set_lines(s.res_buf, 0, -1, false, {
           "",
           string.format("  %s  run local tests      %s  submit to NeetCode", keys.run, keys.submit),
+          string.format("  %s  edit test cases      %s  add failed submission case", keys.tests, keys.test_failed),
           "",
           string.format("  %d visible test case(s) · %d hidden",
             #test_cases(s), meta.test_case_count or 0),
@@ -880,10 +882,11 @@ function M.open(problem, opts)
         vim.bo[s.res_buf].modifiable = false
         hl.apply(s.res_buf, {
           { 1, 0, 80, "NeetCodeKey" },
-          { 3, 0, 80, "NeetCodeMuted" },
-          { 5, 0, 80, "NeetCodeMuted" },
+          { 2, 0, 100, "NeetCodeKey" },
+          { 4, 0, 80, "NeetCodeMuted" },
           { 6, 0, 80, "NeetCodeMuted" },
-          { 8, 0, 80, "NeetCodeMuted" },
+          { 7, 0, 80, "NeetCodeMuted" },
+          { 9, 0, 80, "NeetCodeMuted" },
         })
       end)
     end)

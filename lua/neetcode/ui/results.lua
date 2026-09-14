@@ -138,7 +138,7 @@ function M.render_submit(buf, data)
   end
 
   local failing = data.last_executed_test_case
-  if not accepted and failing then
+  if not accepted and type(failing) == "table" then
     push(lines, spans, "")
     push(lines, spans, string.format("  First failing case (#%d)",
       (failing.test_case_index or 0) + 1), "NeetCodeFail")
@@ -146,6 +146,9 @@ function M.render_submit(buf, data)
     block(lines, spans, "expected", failing.expected_output, "NeetCodeMuted")
     block(lines, spans, "actual", failing.user_output, "NeetCodeFail")
     block(lines, spans, "logs", failing.user_logs, "NeetCodeMuted")
+    if type(failing.input) == "string" and vim.trim(failing.input) ~= "" then
+      push(lines, spans, "  :NeetCode test-failed to add this input to local tests", "NeetCodeMuted")
+    end
   end
 
   if data.stderr and data.stderr ~= vim.NIL and data.stderr ~= "" then

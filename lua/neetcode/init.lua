@@ -12,8 +12,6 @@ local M = {}
 --- token. NeetCode has password sign-in disabled, so this is the only way for a
 --- headless client to authenticate.
 local TOKEN_SNIPPET = [[
-Open https://neetcode.io while logged in, then run this in the DevTools console:
-
 (async () => {
   const rows = await new Promise((res, rej) => {
     const r = indexedDB.open('firebaseLocalStorageDb');
@@ -32,7 +30,6 @@ Open https://neetcode.io while logged in, then run this in the DevTools console:
   console.log(t || 'NOT FOUND - are you logged in on this tab?');
 })()
 
-Then run:  :NeetCode login <paste-the-token>
 ]]
 
 function M.roadmap()
@@ -56,12 +53,7 @@ function M.login(token)
     return finish(token)
   end
 
-  print(TOKEN_SNIPPET)
-  vim.ui.input({ prompt = "NeetCode refresh token: " }, function(input)
-    if input and vim.trim(input) ~= "" then
-      finish(vim.trim(input))
-    end
-  end)
+  require("neetcode.ui.login").open(TOKEN_SNIPPET, finish)
 end
 
 function M.logout()
