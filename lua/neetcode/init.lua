@@ -133,6 +133,15 @@ function M.submit()
   require("neetcode.ui.problem").submit()
 end
 
+--- Toggle completed for the selected problem list row, or the open problem.
+function M.complete()
+  if vim.bo.filetype == "neetcode-problems" then
+    require("neetcode.ui.problems").toggle_complete()
+    return
+  end
+  require("neetcode.ui.problem").toggle_complete()
+end
+
 function M.setup(opts)
   config.setup(opts)
   hl.setup()

@@ -100,26 +100,7 @@ local function keymaps()
   map("q", M.close, "close")
   map("<Esc>", M.close, "close")
 
-  map("t", function()
-    local p = current()
-    if not p then
-      return
-    end
-    if progress.is_solved(p) then
-      progress.unmark(p, function(err)
-        vim.schedule(function()
-          if err then util.err(err) end
-        end)
-      end)
-    else
-      progress.mark(p, function(err)
-        vim.schedule(function()
-          if err then util.err(err) end
-        end)
-      end)
-    end
-    render()
-  end, "toggle solved")
+  map(config.options.keys.problem.complete, function() M.toggle_complete() end, "toggle solved")
 
   map("o", function()
     local p = current()
@@ -136,6 +117,20 @@ local function keymaps()
       util.notify("no video for this problem")
     end
   end, "open the NeetCode video")
+end
+
+--- Toggle the problem under the cursor as completed.
+function M.toggle_complete()
+  local p = current()
+  if not p then
+    return
+  end
+  progress.toggle(p, function(err)
+    vim.schedule(function()
+      if err then util.err(err) end
+    end)
+  end)
+  render()
 end
 
 function M.open(pattern, list)

@@ -13,6 +13,7 @@ local SUBCOMMANDS = {
   lang = function(args) require("neetcode").set_lang(args[1]) end,
   run = function() require("neetcode").run() end,
   submit = function() require("neetcode").submit() end,
+  complete = function() require("neetcode").complete() end,
   tests = function() require("neetcode.ui.problem").tests() end,
   ["test-failed"] = function() require("neetcode.ui.problem").test_failed() end,
 }

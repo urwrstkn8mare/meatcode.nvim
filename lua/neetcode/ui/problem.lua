@@ -324,6 +324,26 @@ function M.submit()
   end)
 end
 
+--- Toggle the open problem as completed on neetcode.io.
+function M.toggle_complete()
+  local s = ready()
+  if not s then
+    return
+  end
+  progress.toggle(s.problem, function(err, solved)
+    vim.schedule(function()
+      if err then
+        return util.err(err)
+      end
+      util.notify(s.problem.name .. (solved and " marked complete" or " marked incomplete"))
+      pcall(render_description, s)
+      pcall(function()
+        require("neetcode.ui.roadmap").refresh()
+      end)
+    end)
+  end)
+end
+
 --- Push the current buffer up to neetcode.io so the web editor matches.
 function M.push()
   local s = current_session()
@@ -481,6 +501,7 @@ local function keymaps(s)
     map(keys.submit, M.submit, "neetcode: submit to NeetCode")
     map(keys.tests, M.tests, "neetcode: edit test cases")
     map(keys.test_failed, M.test_failed, "neetcode: add failed submission case")
+    map(keys.complete, M.toggle_complete, "neetcode: toggle completed")
     -- A problem tab is one unit: closing a split closes the tab.
     map("<C-w>c", function() M.close(s) end, "neetcode: close problem")
     map("<C-w>q", function() M.close(s) end, "neetcode: close problem")

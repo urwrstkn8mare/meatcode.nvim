@@ -168,6 +168,21 @@ function M.unmark(problem, cb)
   end)
 end
 
+--- Flip solved state locally and on the server.
+---@param problem table catalog entry
+---@param cb fun(err: string|nil, solved: boolean|nil)|nil
+function M.toggle(problem, cb)
+  cb = cb or function() end
+  if M.is_solved(problem) then
+    return M.unmark(problem, function(err)
+      cb(err, false)
+    end)
+  end
+  M.mark(problem, function(err)
+    cb(err, true)
+  end)
+end
+
 function M.load()
   load_cache()
 end

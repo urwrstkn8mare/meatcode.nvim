@@ -74,6 +74,7 @@ sent anywhere except `neetcode.io` and Google's token endpoint.
 | `:NeetCode` | Open the roadmap — everything else starts here |
 | `:NeetCode run` | Run the visible test cases locally |
 | `:NeetCode submit` | Submit to NeetCode's judge (hidden cases) |
+| `:NeetCode complete` | Toggle the current/selected problem as completed |
 | `:NeetCode list [name]` | Show or switch the curated list |
 | `:NeetCode lang [name]` | Show or switch the language |
 | `:NeetCode sync` | Refresh the catalog and your progress |
@@ -103,6 +104,7 @@ node already shows where you are. Set `ui.hide_cursor = false` to keep it.
 | --- | --- |
 | `<leader>nr` | Run the visible test cases locally |
 | `<leader>ns` | Submit to NeetCode |
+| `<leader>nc` | Toggle the problem as completed |
 | `<CR>` / `<Tab>` | In the statement: open the hint or diagram under the cursor |
 | `q` | Close the problem |
 
@@ -164,7 +166,7 @@ over seeded solutions, `clangd --check` goes from 1–4 errors per file to zero.
 | Key | Action |
 | --- | --- |
 | `<CR>` | Open the problem |
-| `t` | Toggle solved |
+| `<leader>nc` | Toggle solved |
 | `o` | Open on LeetCode |
 | `v` | Open the NeetCode video |
 
@@ -178,6 +180,7 @@ LSP, treesitter, formatters and keymaps all work normally.
 | --- | --- |
 | `<leader>nr` | Run the visible test cases locally |
 | `<leader>ns` | Submit to NeetCode (hidden suite) |
+| `<leader>nc` | Toggle completed |
 
 Solutions live at `stdpath("data")/neetcode/solutions/<topic>/<problem>.<ext>`.
 
@@ -259,7 +262,7 @@ require("neetcode").setup({
   ui = { node_width = 24, border = "rounded" },
   keys = {
     roadmap = { open = "<CR>", quit = "q", cycle_list = "L", sync = "R" },
-    problem = { run = "<leader>nr", submit = "<leader>ns", quit = "q" },
+    problem = { run = "<leader>nr", submit = "<leader>ns", complete = "<leader>nc", quit = "q" },
   },
 })
 ```
