@@ -115,21 +115,21 @@ function M.render_submit(buf, data)
     accepted and "NeetCodePass" or "NeetCodeFail")
   push(lines, spans, "")
 
-  if data.time or data.memory then
-    push(lines, spans, string.format("      runtime   %ss", data.time or "?"), "NeetCodeMuted")
-    push(lines, spans, string.format("      memory    %d KB", data.memory or 0), "NeetCodeMuted")
-  end
+  local dist = data.distribution or {}
+  local time_pct = dist.timeDistribution and dist.timeDistribution.percentile
+  local mem_pct = dist.memoryDistribution and dist.memoryDistribution.percentile
 
-  local dist = data.distribution and data.distribution.timeDistribution
-  if dist and dist.points then
-    for _, pt in ipairs(dist.points) do
-      if pt.isUserPoint then
-        push(lines, spans,
-          string.format("      faster than roughly %.0f%% of submissions", 100 - (pt.percentage or 0)),
-          "NeetCodeMuted")
-        break
-      end
-    end
+  if data.time then
+    local ms = tonumber(data.time)
+    local runtime = ms and string.format("%.0f ms", ms * 1000) or (tostring(data.time) .. "s")
+    local beats = time_pct and string.format("  (Beats %.1f%%)", time_pct) or ""
+    push(lines, spans, string.format("      runtime   %s%s", runtime, beats), "NeetCodeMuted")
+  end
+  if data.memory then
+    local kb = tonumber(data.memory)
+    local memory = kb and string.format("%.1f MB", kb / 1024) or tostring(data.memory)
+    local beats = mem_pct and string.format("  (Beats %.1f%%)", mem_pct) or ""
+    push(lines, spans, string.format("      memory    %s%s", memory, beats), "NeetCodeMuted")
   end
 
   if data.compile_output and data.compile_output ~= vim.NIL and data.compile_output ~= "" then
