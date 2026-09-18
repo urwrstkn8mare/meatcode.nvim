@@ -367,10 +367,6 @@ local function drop_session(s)
     return
   end
   sessions[s.problem.id] = nil
-  if s.augroup then
-    pcall(vim.api.nvim_del_augroup_by_id, s.augroup)
-    s.augroup = nil
-  end
 end
 
 function M.close(s)
@@ -408,6 +404,20 @@ local function is_float(win)
   return ok and cfg.relative ~= nil and cfg.relative ~= ""
 end
 
+--- Re-apply the pane proportions against the current terminal size. Called at
+--- build time and again on every `VimResized`, so shrinking or growing the
+--- terminal keeps the description/editor/results split looking the same
+--- instead of leaving the description at its old width and squeezing the
+--- editor.
+local function relayout(s)
+  if vim.api.nvim_win_is_valid(s.desc_win) then
+    vim.api.nvim_win_set_width(s.desc_win, math.floor(vim.o.columns * 0.42))
+  end
+  if vim.api.nvim_win_is_valid(s.res_win) then
+    vim.api.nvim_win_set_height(s.res_win, math.min(14, math.floor(vim.o.lines * 0.35)))
+  end
+end
+
 local watched = false
 local function ensure_watchers()
   if watched then
@@ -415,6 +425,22 @@ local function ensure_watchers()
   end
   watched = true
   local group = vim.api.nvim_create_augroup("NeetCodeProblemLifecycle", { clear = true })
+  -- A terminal resize changes `columns`/`lines` under every open problem tab;
+  -- re-proportion each one and redraw its diagrams (image geometry is in
+  -- cells, so it is invalidated by the resize).
+  vim.api.nvim_create_autocmd("VimResized", {
+    group = group,
+    callback = function()
+      for _, s in pairs(sessions) do
+        relayout(s)
+        for _, img in ipairs(s.drawn or {}) do
+          pcall(function()
+            img:render()
+          end)
+        end
+      end
+    end,
+  })
   -- Closing a layout pane (description / code / results) tears the whole tab
   -- down so you are never left with a half-open problem view. Other windows
   -- in the tab are ignored — see is_float().
@@ -805,24 +831,10 @@ local function build_windows(s)
   vim.wo[s.res_win].signcolumn = "no"
   vim.wo[s.res_win].wrap = false
 
-  vim.api.nvim_win_set_width(s.desc_win, math.floor(vim.o.columns * 0.42))
-  vim.api.nvim_win_set_height(s.res_win, math.min(14, math.floor(vim.o.lines * 0.35)))
+  relayout(s)
 
   vim.api.nvim_set_current_win(s.code_win)
 
-  -- Image geometry is in cells, so a resize invalidates it.
-  s.augroup = vim.api.nvim_create_augroup("NeetCodeProblemImages_" .. s.problem.id, { clear = true })
-  vim.api.nvim_create_autocmd("VimResized", {
-    group = s.augroup,
-    buffer = s.desc_buf,
-    callback = function()
-      for _, img in ipairs(s.drawn or {}) do
-        pcall(function()
-          img:render()
-        end)
-      end
-    end,
-  })
   ensure_watchers()
 end
 
