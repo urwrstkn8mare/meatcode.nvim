@@ -24,8 +24,9 @@ local defaults = {
 	runner = {
 		python = { cmd = { "python3" } },
 		cpp = {
-			-- {source} and {out} are substituted at build time.
-			cmd = { "c++", "-std=c++23", "-O2", "-o", "{out}", "{source}" },
+			-- {source} and {out} are substituted at build time. Keep debug symbols
+			-- and disable optimisation so an LLDB rerun can show source backtraces.
+			cmd = { "c++", "-std=c++23", "-g", "-O0", "-o", "{out}", "{source}" },
 			-- Drop a `.clangd` beside your solutions that force-includes a header
 			-- supplying the #includes and node types NeetCode's judge provides
 			-- implicitly, so a language server stops flagging valid solutions.

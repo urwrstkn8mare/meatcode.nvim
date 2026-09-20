@@ -74,8 +74,109 @@ local function decode_report(stdout)
   return ok and decoded or nil
 end
 
+--- Describe crash signals that commonly indicate an error in a C++ solution.
+---@param signal integer
+---@return string|nil
+local function crash_diagnostic(signal)
+  local diagnostics = {
+    [4] = "SIGILL: illegal instruction",
+    [6] = "SIGABRT: abort",
+    [8] = "SIGFPE: arithmetic exception",
+    [11] = "SIGSEGV: segmentation fault — invalid memory access",
+  }
+  diagnostics[vim.uv.os_uname().sysname == "Darwin" and 10 or 7] =
+    "SIGBUS: bus error — invalid or misaligned memory access"
+  return diagnostics[signal]
+end
+
+--- Format a terminated process result for the local-run results panel.
+---@param res vim.SystemCompleted
+---@return string
+local function process_failure(res)
+  if res.code == 124 or res.signal == 15 or res.signal == 9 then
+    return "timed out — possible infinite loop"
+  end
+  if res.signal and res.signal ~= 0 then
+    local diagnostic = crash_diagnostic(res.signal)
+    if diagnostic then
+      return string.format("crashed with signal %d (%s)", res.signal, diagnostic)
+    end
+    return string.format("crashed with signal %d", res.signal)
+  end
+
+  local msg = (res.stderr or ""):gsub("CASE %d+\n", "")
+  msg = vim.trim(msg)
+  if msg == "" then
+    return "the harness produced no output (exit code " .. tostring(res.code) .. ")"
+  end
+  return msg
+end
+
+--- Re-run a crashed C++ harness under LLDB to recover a symbolic backtrace.
+---@param cmd string[]
+---@param dir string
+---@param timeout_ms integer
+---@param cb fun(backtrace: string|nil)
+local function debugger_backtrace(cmd, dir, timeout_ms, cb)
+  if vim.fn.executable("lldb") ~= 1 then
+    return cb(nil)
+  end
+
+  local debugger = {
+    "lldb", "--batch", "--no-lldbinit", "--no-use-colors",
+    "--one-line", "run",
+    "--one-line-on-crash", "thread backtrace",
+    "--",
+  }
+  for _, arg in ipairs(cmd) do
+    table.insert(debugger, arg)
+  end
+
+  vim.system(debugger, { text = true, cwd = dir, timeout = timeout_ms }, function(res)
+    vim.schedule(function()
+      local output = vim.trim((res.stdout or "") .. "\n" .. (res.stderr or ""))
+      local marker = output:find("(lldb) thread backtrace", 1, true)
+      if marker then
+        output = vim.trim(output:sub(marker + #"(lldb) thread backtrace"))
+      end
+      cb(output:find("frame #", 1, true) and output or nil)
+    end)
+  end)
+end
+
+--- Complete a failed run, including an LLDB backtrace for a C++ crash.
+---@param res vim.SystemCompleted
+---@param cmd string[]
+---@param dir string
+---@param timeout_ms integer
+---@param debug_crash boolean|nil
+---@param cb fun(result: neetcode.RunResult)
+local function finish_failure(res, cmd, dir, timeout_ms, debug_crash, cb)
+  local last = nil
+  for idx in (res.stderr or ""):gmatch("CASE (%d+)") do
+    last = tonumber(idx)
+  end
+
+  local msg = process_failure(res)
+  if last then
+    msg = string.format("test case %d: %s", last + 1, msg)
+  end
+
+  if not debug_crash or not res.signal or res.signal == 0 or res.signal == 15 or res.signal == 9 then
+    return cb(summarize({ ok = false, error = msg, cases = {} }))
+  end
+  debugger_backtrace(cmd, dir, timeout_ms, function(backtrace)
+    if backtrace then
+      msg = msg .. "\n\nbacktrace:\n" .. backtrace
+    end
+    cb(summarize({ ok = false, error = msg, cases = {} }))
+  end)
+end
+
+
+
 --- Run the compiled/interpreted harness and hand back a report.
-local function execute(cmd, dir, cb)
+local function execute(cmd, dir, cb, debug_crash)
   local timeout_ms = (config.options.runner.time_limit or 10) * 1000
   -- Give the whole batch room proportional to the number of cases.
   vim.system(cmd, { text = true, cwd = dir, timeout = timeout_ms * 6 }, function(res)
@@ -86,27 +187,7 @@ local function execute(cmd, dir, cb)
       end
 
       -- No report: the process died. Attribute it to the last announced case.
-      local last = nil
-      for idx in (res.stderr or ""):gmatch("CASE (%d+)") do
-        last = tonumber(idx)
-      end
-
-      local msg
-      if res.code == 124 or res.signal == 15 or res.signal == 9 then
-        msg = "timed out — possible infinite loop"
-      elseif res.signal and res.signal ~= 0 then
-        msg = string.format("crashed with signal %d", res.signal)
-      else
-        msg = (res.stderr or ""):gsub("CASE %d+\n", "")
-        msg = vim.trim(msg)
-        if msg == "" then
-          msg = "the harness produced no output (exit code " .. tostring(res.code) .. ")"
-        end
-      end
-      if last then
-        msg = string.format("test case %d: %s", last + 1, msg)
-      end
-      cb(summarize({ ok = false, error = msg, cases = {} }))
+      finish_failure(res, cmd, dir, timeout_ms, debug_crash, cb)
     end)
   end)
 end
@@ -228,7 +309,7 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode)
         end
         return fail(cb, msg)
       end
-      execute({ bin, dir }, dir, cb)
+      execute({ bin, dir }, dir, cb, true)
     end)
   end)
 end

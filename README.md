@@ -245,6 +245,12 @@ in C++.
 When your output matches the reference only up to ordering, the case is reported
 as passing with a note; the real judge makes the final call.
 
+Hard C++ crashes retain their signal number and include a diagnosis when known —
+for example, `SIGSEGV` for invalid memory access and `SIGBUS` for invalid or
+misaligned memory access. When LLDB is installed, the harness reruns only after
+a crash and appends its source backtrace. The failing visible test case is
+identified when the harness had started it.
+
 ## Configuration
 
 ```lua
@@ -257,7 +263,7 @@ require("neetcode").setup({
   timeout = 30,
   runner = {
     python = { cmd = { "python3" } },
-    cpp = { cmd = { "c++", "-std=c++23", "-O2", "-o", "{out}", "{source}" } },
+    cpp = { cmd = { "c++", "-std=c++23", "-g", "-O0", "-o", "{out}", "{source}" } },
     time_limit = 10,
   },
   ui = { node_width = 24, border = "rounded" },
