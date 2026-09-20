@@ -2,7 +2,7 @@
 
 NeetCode has no public/documented API. Everything here was recovered by reading
 the site's Angular bundle and probing endpoints. It can change without notice —
-`lua/neetcode/catalog/scraper.lua` is written to fail loudly and keep the last
+`lua/eetcode/catalog/scraper.lua` is written to fail loudly and keep the last
 good cache rather than silently serve wrong data.
 
 ## Transport
@@ -56,7 +56,7 @@ grant_type=refresh_token&refresh_token=<token>
 
 The refresh token lives in the browser's **IndexedDB** (`firebaseLocalStorageDb`
 → object store `firebaseLocalStorage`), not `localStorage` — Firebase JS SDK v9+
-prefers IndexedDB. See `:NeetCode login` for the extraction snippet.
+prefers IndexedDB. See `:EetCode login` for the extraction snippet.
 
 ## Endpoints
 
@@ -93,7 +93,7 @@ prefers IndexedDB. See `:NeetCode login` for the extraction snippet.
 
 **`solutions` is the key to local testing.** Expected outputs are never exposed,
 but the reference implementation is — so running it locally over the same inputs
-recovers the expected output. That is exactly what `lua/neetcode/runner` does.
+recovers the expected output. That is exactly what `lua/eetcode/runner` does.
 
 ### Authenticated
 

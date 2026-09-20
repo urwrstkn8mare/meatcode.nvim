@@ -1,8 +1,9 @@
-# neetcode.nvim
+# eetCode.nvim
 
-A TUI for the [NeetCode](https://neetcode.io) roadmap. Browse the topic graph,
-solve problems in a real buffer with your own LSP and keymaps, run the visible
-test cases **locally**, and submit to NeetCode's cloud judge for the hidden suite.
+A TUI for the [NeetCode](https://neetcode.io) roadmap and the full
+[LeetCode](https://leetcode.com/problemset/) catalog. Search every LeetCode
+problem, pick a random problem or the daily challenge, solve in a real buffer,
+run matching NeetCode cases locally, and submit through LeetCode by default.
 
 ![NeetCode Roadmap](assets/screenshot.png)
 
@@ -18,7 +19,7 @@ NeetCode keeps expected outputs server-side — the API hands you test case
 
 So `run` executes your code *and* the reference solution over the same inputs and
 diffs them, entirely on your machine — no rate limits, instant feedback.
-`submit` still goes to the cloud, because only the backend has the hidden suite.
+`submit` uses the selected provider's cloud judge for the hidden suite.
 
 ## Install
 
@@ -26,8 +27,8 @@ diffs them, entirely on your machine — no rate limits, instant feedback.
 
 ```lua
 {
-  "samits/neetcode.nvim",
-  cmd = "NeetCode",
+  "samits/eetCode.nvim",
+  cmd = "EetCode",
   -- Draws problem diagrams inline. Optional: without it, a diagram stays a
   -- line you open in your browser.
   dependencies = { "3rd/image.nvim" },
@@ -43,7 +44,7 @@ diffs them, entirely on your machine — no rate limits, instant feedback.
 <details><summary>packer.nvim</summary>
 
 ```lua
-use { "samits/neetcode.nvim", config = function() require("neetcode").setup({}) end }
+use { "samits/eetCode.nvim", config = function() require("eetcode").setup({}) end }
 ```
 
 </details>
@@ -52,40 +53,44 @@ Requires Neovim 0.10+ and `curl`. Local runs need `python3` and/or a C++ compile
 
 ## Log in
 
-Browsing works signed out. Running, submitting and progress sync need an account.
+Browsing and opening free problems works signed out. Submission and remote
+progress sync require the corresponding account:
 
-NeetCode uses Google/GitHub OAuth and has password sign-in disabled, so there is
-no way to log in from the terminal directly. Instead you hand over a Firebase
-refresh token once:
+- `:EetCode login leetcode` explains how to copy the complete Cookie request
+  header from a signed-in `leetcode.com` browser tab. The cookie must include
+  `LEETCODE_SESSION` and `csrftoken`.
+- `:EetCode login neetcode` explains how to copy NeetCode's Firebase refresh
+  token from browser storage.
 
-1. Open <https://neetcode.io> in a browser, signed in.
-2. Run `:NeetCode login` and follow the browser storage instructions in the window.
-   No script is required. Alternatively, press `y` to copy the console script.
-3. Press `p` in the login window and paste the token into the prompt.
-
-The token is stored at `stdpath("cache")/neetcode/auth.json` with `0600`
-permissions and is exchanged for a short-lived ID token as needed. Nothing is
-sent anywhere except `neetcode.io` and Google's token endpoint.
+Credentials are stored with `0600` permissions under
+`stdpath("cache")/eetcode`. They are sent only to their respective service.
+Use `:EetCode logout leetcode` or `:EetCode logout neetcode` to remove one.
 
 ## Usage
 
 | Command | What it does |
 | --- | --- |
-| `:NeetCode` | Open the roadmap — everything else starts here |
-| `:NeetCode run` | Run the visible test cases locally |
-| `:NeetCode submit` | Submit to NeetCode's judge (hidden cases) |
-| `:NeetCode complete` | Toggle the current/selected problem as completed |
-| `:NeetCode reset` | Reset the open problem to its starter code, clear local test cases, and mark it incomplete |
-| `:NeetCode list [name]` | Show or switch the curated list |
-| `:NeetCode lang [name]` | Show or switch the language |
-| `:NeetCode sync` | Refresh the catalog and your progress |
-| `:NeetCode status` | Show current state |
-| `:NeetCode login` / `logout` | Manage authentication |
+| `:EetCode` | Open the NeetCode roadmap |
+| `:EetCode leetcode [query]` | Search all LeetCode problems |
+| `:EetCode random` | Open a random accessible unsolved LeetCode problem |
+| `:EetCode daily` | Open LeetCode's problem of the day |
+| `:EetCode run` | Run visible cases locally when a NeetCode oracle exists |
+| `:EetCode submit` | Submit through the provider shown in the problem view |
+| `:EetCode complete` | Toggle NeetCode completion; LeetCode requires acceptance |
+| `:EetCode reset` | Reset the open solution to its selected provider's starter |
+| `:EetCode list [name]` | Show or switch the roadmap's curated list |
+| `:EetCode lang [name]` | Show or switch the language |
+| `:EetCode sync` | Refresh both catalogs and unified progress |
+| `:EetCode status` | Show both provider states |
 
 `list` takes `blind75`, `neetcode150`, `neetcode250` or `allNC`; `lang` takes
-`python` or `cpp` for local runs, plus any language NeetCode itself accepts if
-you only ever `submit`. Both are also settable in `setup()`, and `L` / `H` on
-the roadmap cycle the list without typing a command.
+`python`, `cpp`, or another language supported by the selected cloud judge.
+`L` / `H` on the roadmap cycle the curated list without typing a command.
+
+Progress shown in both lists is the union of both accounts. A LeetCode acceptance
+is also marked complete on NeetCode when that account is logged in. LeetCode
+does not expose an API to fabricate or remove an accepted submission, so
+NeetCode-only completions cannot change the status on leetcode.com.
 
 ### Roadmap
 
@@ -99,17 +104,28 @@ the roadmap cycle the list without typing a command.
 The terminal cursor is hidden while the roadmap has focus, since the selected
 node already shows where you are. Set `ui.hide_cursor = false` to keep it.
 
+### LeetCode list
+
+The list header shows the current LeetCode streak and whether today is complete,
+plus the `random` and `daily` commands. Press `/` to filter by problem number,
+title, slug, or difficulty; `<CR>` opens the selected problem.
+
 ### Solving
+
+Problems opened from the roadmap, full list, random command, or daily command
+use LeetCode statements, starter code, and submissions by default. If a problem
+is LeetCode Premium and the signed-in user is not Premium, the matching
+NeetCode problem is used instead when available.
 
 | Key | Action |
 | --- | --- |
-| `<leader>nr` | Run the visible test cases locally |
-| `<leader>ns` | Submit to NeetCode |
-| `<leader>nc` | Toggle the problem as completed |
+| `<leader>nr` | Run visible cases locally when a NeetCode oracle exists |
+| `<leader>ns` | Submit to the provider shown in the results pane |
+| `<leader>nc` | Toggle NeetCode completion |
+| `<leader>nol` | Reopen the problem using LeetCode |
+| `<leader>non` | Reopen the problem using NeetCode |
 | `<CR>` / `<Tab>` | In the statement: open the hint or diagram under the cursor |
 | `q` | Close the problem |
-
-Hints and topic/company tags are folded exactly as they are on the site.
 
 ### Diagrams
 
@@ -148,7 +164,7 @@ rather than silently accepted.
 ```text
 solutions/
 ├── .clangd                 # one fragment per problem, PathMatch-scoped
-└── .neetcode/
+└── .eetcode/
     ├── prelude.h           # standard library + using namespace std
     ├── clone-graph.h       # class Node { vector<Node*> neighbors; ... }
     └── meeting-schedule.h  # class Interval { int start, end; ... }
@@ -179,16 +195,17 @@ LSP, treesitter, formatters and keymaps all work normally.
 
 | Key | Action |
 | --- | --- |
-| `<leader>nr` | Run the visible test cases locally |
-| `<leader>ns` | Submit to NeetCode (hidden suite) |
+| `<leader>nr` | Run the visible test cases locally when available |
+| `<leader>ns` | Submit to LeetCode by default, or the active fallback provider |
 | `<leader>nc` | Toggle completed |
+| `<leader>nol` / `<leader>non` | Switch the open problem's provider |
 
-Solutions live at `stdpath("data")/neetcode/solutions/<topic>/<problem>.<ext>`.
+Solutions live at `stdpath("data")/eetcode/solutions/<topic>/<problem>.<ext>`.
 
-**Edit test cases.** Run `:NeetCode tests` (`<leader>nt`) to edit the local suite.
+**Edit test cases.** Run `:EetCode tests` (`<leader>nt`) to edit the local suite.
 Add cases separated by a line containing `---`, or delete a whole case to remove
 it. Use `:w` to save and `:q` to close. Local runs also save pending edits.
-`:NeetCode test-failed` (`<leader>na`) adds and saves the latest failed submission
+`:EetCode test-failed` (`<leader>na`) adds and saves the latest failed submission
 input, skipping duplicates. These cases only affect local runs.
 
 The edited suite is stored in `<solution-file>.cases`. Initially it includes the
@@ -254,12 +271,12 @@ identified when the harness had started it.
 ## Configuration
 
 ```lua
-require("neetcode").setup({
+require("eetcode").setup({
   list = "neetcode150",
   lang = "python",
-  solutions_dir = vim.fn.stdpath("data") .. "/neetcode/solutions",
-  cache_dir = vim.fn.stdpath("cache") .. "/neetcode",
-  catalog_max_age = 24 * 60 * 60,   -- false to only refresh on :NeetCode sync
+  solutions_dir = vim.fn.stdpath("data") .. "/eetcode/solutions",
+  cache_dir = vim.fn.stdpath("cache") .. "/eetcode",
+  catalog_max_age = 24 * 60 * 60,   -- false to only refresh on :EetCode sync
   timeout = 30,
   runner = {
     python = { cmd = { "python3" } },
@@ -269,7 +286,10 @@ require("neetcode").setup({
   ui = { node_width = 24, border = "rounded" },
   keys = {
     roadmap = { open = "<CR>", quit = "q", cycle_list = "L", sync = "R" },
-    problem = { run = "<leader>nr", submit = "<leader>ns", complete = "<leader>nc", quit = "q" },
+    problem = {
+      run = "<leader>nr", submit = "<leader>ns", complete = "<leader>nc",
+      open_leetcode = "<leader>nol", open_neetcode = "<leader>non", quit = "q",
+    },
   },
 })
 ```
@@ -292,6 +312,6 @@ See [`doc/api.md`](doc/api.md) for the full reverse-engineered API map.
 
 ## Caveats
 
-This uses a private API that can change at any time. It is not affiliated with
-or endorsed by NeetCode. Be reasonable with the submit endpoint — it runs on
-someone else's infrastructure.
+LeetCode and NeetCode APIs used here are undocumented and can change without
+notice. eetCode.nvim is not affiliated with or endorsed by either service.
+Submissions execute on third-party infrastructure; use them responsibly.

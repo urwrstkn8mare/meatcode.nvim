@@ -1,0 +1,222 @@
+*eetcode.txt*  NeetCode roadmap and LeetCode problem workflow
+
+==============================================================================
+CONTENTS                                                          *eetcode*
+
+  1. Introduction ......................... |eetcode-intro|
+  2. Setup ................................ |eetcode-setup|
+  3. Authentication ....................... |eetcode-auth|
+  4. Commands ............................. |eetcode-commands|
+  5. Mappings ............................. |eetcode-mappings|
+  6. Local test runs ...................... |eetcode-runner|
+  7. Configuration ........................ |eetcode-config|
+
+==============================================================================
+1. INTRODUCTION                                            *eetcode-intro*
+
+Browse the NeetCode roadmap and the complete LeetCode catalog, solve problems
+in real buffers, run matching NeetCode visible cases locally, and submit through
+LeetCode by default.
+
+Local runs work because NeetCode exposes its own reference solution for every
+problem. Your code and the reference are executed over the same inputs and the
+outputs diffed, so no network round trip is needed to know whether you are
+right on the visible cases.
+
+Requires Neovim 0.10+ and `curl`. Local runs need `python3` and/or a C++17
+compiler.
+
+==============================================================================
+2. SETUP                                                   *eetcode-setup*
+
+>lua
+    require("eetcode").setup({
+      lang = "python",
+      list = "neetcode150",
+    })
+<
+Then run |:EetCode|.
+
+==============================================================================
+3. AUTHENTICATION                                           *eetcode-auth*
+
+Browsing works signed out. Submission and remote progress sync require the
+corresponding account.
+
+Run `:EetCode login leetcode` to see how to copy the complete Cookie request
+header from a signed-in leetcode.com tab. It must contain LEETCODE_SESSION and
+csrftoken.
+
+Run `:EetCode login neetcode` to see how to extract NeetCode's Firebase refresh
+token from browser storage.
+
+Both credentials are written below `stdpath("cache")/eetcode` with mode 0600.
+Use `:EetCode logout leetcode` or `:EetCode logout neetcode` to remove one.
+
+==============================================================================
+4. COMMANDS                                             *eetcode-commands*
+
+                                                                  *:EetCode*
+:EetCode [roadmap]     Open the NeetCode roadmap.
+:EetCode leetcode [q]  Search every LeetCode problem; q pre-filters the list.
+:EetCode random        Open a random accessible unsolved problem.
+:EetCode daily         Open LeetCode's problem of the day.
+:EetCode run           Run visible cases locally when a NeetCode oracle exists.
+:EetCode tests         Edit the local suite; add/remove cases separated by ---.
+:EetCode test-failed   Save the latest failed submission input to local tests.
+:EetCode submit        Submit through the provider shown in the results pane.
+:EetCode reset         Reset to the selected provider's starter code.
+:EetCode list [name]   blind75 | neetcode150 | neetcode250 | allNC
+                       With no argument, prints the current roadmap filter.
+:EetCode lang [name]   python | cpp | java | go | ...
+                       Only python and cpp run locally; cloud support depends
+                       on the active provider.
+:EetCode sync          Refresh both catalogs and unified progress.
+:EetCode status        Print both provider states.
+:EetCode login NAME    Log in to `leetcode` or `neetcode`.
+:EetCode logout NAME   Remove credentials for `leetcode` or `neetcode`.
+
+==============================================================================
+5. MAPPINGS                                             *eetcode-mappings*
+
+Roadmap ~
+  h j k l / arrows      Move between topics
+  <CR>                  Open the selected topic
+  L / H                 Next / previous curated list
+  R                     Sync catalog and progress
+  ?                     Help
+  q                     Close
+
+Problem list ~
+  <CR>                  Open the problem
+  t                     Toggle solved
+  o                     Open on LeetCode
+  v                     Open the NeetCode video
+  q                     Close
+
+LeetCode list ~
+  /                     Filter by number, title, slug, or difficulty
+  <CR>                  Open the problem
+  o                     Open in a browser
+  R                     Refresh catalog, progress, and streak
+  q                     Close
+
+Solving ~
+  <leader>nr            Run visible cases locally when available
+  <leader>ns            Submit through the active provider
+  <leader>nc            Toggle NeetCode completion
+  <leader>nol           Reopen using LeetCode
+  <leader>non           Reopen using NeetCode
+  <CR> or <Tab>         Statement window: toggle the hint under the cursor, or
+                        follow the link under it via |vim.ui.open()|.
+  q                     Close the problem (statement/results windows)
+
+The terminal cursor is hidden while the roadmap has focus; the selected node
+already shows the position. Set `ui.hide_cursor = false` to keep it.
+
+==============================================================================
+6. LOCAL TEST RUNS                                        *eetcode-runner*
+
+NeetCode keeps expected outputs on the server, so a local run gets them by
+executing the site's own reference solution over the same inputs and diffing.
+
+Both `function` and `class` problems run locally, in Python and C++. Supported
+types are integers, floats, booleans, chars, strings, nested vectors/lists of
+those, ListNode / TreeNode (array-encoded, as on LeetCode) including lists of
+lists, and helper classes such as Interval. Problems that mutate their first
+argument and return nothing are handled, as are scalars that identify an
+existing node inside another argument.
+
+Design problems (Min Stack, LRU Cache, Trie, ...) replay their call sequence
+against both your class and the reference class and diff the two lists of
+return values. Encode/decode pairs such as Serialize and Deserialize Binary
+Tree are judged by round-tripping the input through both halves.
+
+Problems that cannot be reproduced locally — SQL, and anything encoding
+arguments by reference such as clone-graph's adjacency list — say so plainly
+and direct you to |:EetCode| submit, which always works. C++ additionally
+cannot take vector<Interval>, which Python handles.
+
+Use :EetCode tests (<leader>nt) to add/remove local cases in an editor. Save
+with :w and close with :q. Local runs also save pending edits. The full suite
+is stored beside your solution as <solution-file>.cases, initially seeded
+with visible cases and legacy .tests extras. An empty suite runs no cases;
+delete the .cases file to restore the defaults. Changes affect local runs only.
+
+Use :EetCode test-failed (<leader>na) to add and save the latest failed
+submission input. Duplicate inputs are skipped.
+
+Legacy extra test cases can be added in a file next to your solution named
+`<solution-file>.tests`, with cases separated by a line containing `---`: >
+
+    nums=[1,2,3,4]
+    target=7
+    ---
+    nums=[0,0]
+    target=0
+<
+==============================================================================
+7. CONFIGURATION                                           *eetcode-config*
+
+Defaults: >lua
+    {
+      list = "neetcode150",
+      lang = "python",
+      solutions_dir = vim.fn.stdpath("data") .. "/eetcode/solutions",
+      cache_dir = vim.fn.stdpath("cache") .. "/eetcode",
+      catalog_max_age = 24 * 60 * 60,
+      timeout = 30,
+      runner = {
+        python = { cmd = { "python3" } },
+        cpp = {
+          cmd = { "c++", "-std=c++23", "-O2", "-o", "{out}", "{source}" },
+          clangd = true,
+        },
+        time_limit = 10,
+      },
+      ui = {
+        node_width = 24,
+        border = "rounded",
+        hide_cursor = true,
+        images = true,
+        image_max_height = 18,
+      },
+      keys = {
+        roadmap = { open = "<CR>", quit = "q", cycle_list = "L", sync = "R" },
+        problem = {
+          run = "<leader>nr", submit = "<leader>ns",
+          open_leetcode = "<leader>nol", open_neetcode = "<leader>non",
+          quit = "q",
+        },
+      },
+    }
+<
+`runner.cpp.clangd` generates a `.clangd` beside your solutions. Compile flags
+(including `-std`) are taken from `runner.cpp.cmd`. It force includes
+`.eetcode/prelude.h` (the standard library and `using namespace std;`) for
+every file, plus a per-problem header carrying that problem's own helper types,
+taken from the definition NeetCode leaves in its starter comment. The judge
+supplies all of this implicitly, so without it a language server reports errors
+on valid solutions. Your solution file is left exactly as NeetCode wrote it;
+nothing is inserted into it.
+
+Helper types are deliberately per problem rather than shared: `Node` is an
+adjacency list in Clone Graph and a random pointer in Copy List with Random
+Pointer, so no single definition is correct for both. Headers are written when a
+problem is opened and `.clangd` is rebuilt from what exists on disk. Nothing
+here reaches the judge. An existing `.clangd` the plugin did not write is left
+alone only if it already matches `runner.cpp.cmd`; a stale or conflicting one
+is overwritten.
+
+`ui.images` draws problem diagrams inline through image.nvim, which needs a
+terminal speaking the kitty graphics protocol; the diagram is shown on its own,
+with no caption. Without it a diagram becomes a 🖼 line that <CR> opens
+externally, as the footer links do.
+
+Highlight groups are defined with `default = true` and link to standard groups,
+so a colorscheme can override any of them: `eetCodeNodeDone`,
+`eetCodeNodeTodo`, `eetCodeNodeSelected`, `eetCodeEdge`, `eetCodeBarFill`,
+`eetCodeBarEmpty`, `eetCodeEasy`, `eetCodeMedium`, `eetCodeHard`,
+`eetCodePass`, `eetCodeFail`, `eetCodeWarn`.
+
+vim:tw=78:ts=8:ft=help:norl:
