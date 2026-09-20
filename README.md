@@ -75,6 +75,7 @@ sent anywhere except `neetcode.io` and Google's token endpoint.
 | `:NeetCode run` | Run the visible test cases locally |
 | `:NeetCode submit` | Submit to NeetCode's judge (hidden cases) |
 | `:NeetCode complete` | Toggle the current/selected problem as completed |
+| `:NeetCode reset` | Reset the open problem to its starter code, clear local test cases, and mark it incomplete |
 | `:NeetCode list [name]` | Show or switch the curated list |
 | `:NeetCode lang [name]` | Show or switch the language |
 | `:NeetCode sync` | Refresh the catalog and your progress |

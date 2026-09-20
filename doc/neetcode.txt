@@ -65,6 +65,9 @@ and exchanged for short-lived ID tokens as needed.
 :NeetCode tests         Edit the local suite; add/remove cases separated by ---.
 :NeetCode test-failed   Save the latest failed submission input to local tests.
 :NeetCode submit        Submit to NeetCode's judge, which has the hidden cases.
+:NeetCode reset       Reset the open problem to its starter code, clear its
+                      local test cases, mark it incomplete, and sync the
+                      starter code to neetcode.io.
 :NeetCode list [name]   blind75 | neetcode150 | neetcode250 | allNC
                         With no argument, prints the current list. This is the
                         roadmap's filter; `L` and `H` cycle it in place.

@@ -97,6 +97,33 @@ local function test_cases(s)
   return tests.read(s.path, s.meta.custom_test_cases)
 end
 
+local function render_ready(s)
+  local keys = config.options.keys.problem
+  vim.bo[s.res_buf].modifiable = true
+  vim.api.nvim_buf_set_lines(s.res_buf, 0, -1, false, {
+    "",
+    string.format("  %s  run local tests      %s  submit to NeetCode", keys.run, keys.submit),
+    string.format("  %s  edit test cases      %s  add failed submission case", keys.tests, keys.test_failed),
+    "",
+    string.format("  %d visible test case(s) · %d hidden",
+      #test_cases(s), s.meta.test_case_count or 0),
+    "",
+    "  Local runs diff your output against NeetCode's reference solution.",
+    "  Submitting runs the full hidden suite in the cloud.",
+    "",
+    "  <CR> in the statement opens a ▸ hint or a 🖼 diagram.",
+  })
+  vim.bo[s.res_buf].modifiable = false
+  hl.apply(s.res_buf, {
+    { 1, 0, 80, "NeetCodeKey" },
+    { 2, 0, 100, "NeetCodeKey" },
+    { 4, 0, 80, "NeetCodeMuted" },
+    { 6, 0, 80, "NeetCodeMuted" },
+    { 7, 0, 80, "NeetCodeMuted" },
+    { 9, 0, 80, "NeetCodeMuted" },
+  })
+end
+
 local function current_code(s)
   return table.concat(vim.api.nvim_buf_get_lines(s.code_buf, 0, -1, false), "\n")
 end
@@ -341,6 +368,86 @@ function M.toggle_complete()
         require("neetcode.ui.roadmap").refresh()
       end)
     end)
+  end)
+end
+
+--- Restore the open problem to its starter code and clear its local test files.
+local function reset_local(s, starter)
+  local ok, err = util.write_file(s.path, starter)
+  if not ok then
+    return "could not write starter code: " .. tostring(err)
+  end
+
+  vim.api.nvim_buf_set_lines(s.code_buf, 0, -1, false,
+    vim.split(starter, "\n", { plain = true }))
+  vim.bo[s.code_buf].modified = false
+
+  for _, suffix in ipairs({ ".cases", ".tests" }) do
+    local path = s.path .. suffix
+    local buf = vim.fn.bufnr(path)
+    if buf ~= -1 and vim.api.nvim_buf_is_loaded(buf) then
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
+      vim.bo[buf].modified = false
+    end
+    if vim.uv.fs_stat(path) then
+      local removed, remove_err = vim.uv.fs_unlink(path)
+      if not removed then
+        return string.format("could not remove %s: %s", suffix, tostring(remove_err))
+      end
+    end
+  end
+end
+
+--- Reset the open problem locally and on neetcode.io.
+function M.reset()
+  local s = ready()
+  if not s then
+    return
+  end
+  if s.busy then
+    return util.notify("already running")
+  end
+
+  local starter = (s.meta.starterCode or {})[s.lang] or ""
+  local local_err = reset_local(s, starter)
+  if local_err then
+    return util.err(local_err)
+  end
+
+  s.failed_input = nil
+  s.busy = true
+  results.running(s.res_buf, "Resetting " .. s.problem.name)
+
+  local pending, errors = 2, {}
+  local function done(label, err)
+    if err then
+      table.insert(errors, label .. ": " .. err)
+    end
+    pending = pending - 1
+    if pending > 0 then
+      return
+    end
+    vim.schedule(function()
+      s.busy = false
+      if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+        render_ready(s)
+      end
+      pcall(render_description, s)
+      pcall(function()
+        require("neetcode.ui.roadmap").refresh()
+      end)
+      if #errors > 0 then
+        return util.err("reset locally, but " .. table.concat(errors, "; "))
+      end
+      util.notify(s.problem.name .. " reset to starter code")
+    end)
+  end
+
+  progress.unmark(s.problem, function(err)
+    done("could not mark incomplete", err)
+  end)
+  api.save_user_code(s.problem.id, s.lang, starter, function(err)
+    done("could not sync starter code", err)
   end)
 end
 
@@ -897,30 +1004,7 @@ function M.open(problem, opts)
         render_description(s)
         keymaps(s)
 
-        local keys = config.options.keys.problem
-        vim.bo[s.res_buf].modifiable = true
-        vim.api.nvim_buf_set_lines(s.res_buf, 0, -1, false, {
-          "",
-          string.format("  %s  run local tests      %s  submit to NeetCode", keys.run, keys.submit),
-          string.format("  %s  edit test cases      %s  add failed submission case", keys.tests, keys.test_failed),
-          "",
-          string.format("  %d visible test case(s) · %d hidden",
-            #test_cases(s), meta.test_case_count or 0),
-          "",
-          "  Local runs diff your output against NeetCode's reference solution.",
-          "  Submitting runs the full hidden suite in the cloud.",
-          "",
-          "  <CR> in the statement opens a ▸ hint or a 🖼 diagram.",
-        })
-        vim.bo[s.res_buf].modifiable = false
-        hl.apply(s.res_buf, {
-          { 1, 0, 80, "NeetCodeKey" },
-          { 2, 0, 100, "NeetCodeKey" },
-          { 4, 0, 80, "NeetCodeMuted" },
-          { 6, 0, 80, "NeetCodeMuted" },
-          { 7, 0, 80, "NeetCodeMuted" },
-          { 9, 0, 80, "NeetCodeMuted" },
-        })
+        render_ready(s)
       end)
     end)
   end)

@@ -14,6 +14,7 @@ local SUBCOMMANDS = {
   run = function() require("neetcode").run() end,
   submit = function() require("neetcode").submit() end,
   complete = function() require("neetcode").complete() end,
+  reset = function() require("neetcode.ui.problem").reset() end,
   tests = function() require("neetcode.ui.problem").tests() end,
   ["test-failed"] = function() require("neetcode.ui.problem").test_failed() end,
 }
