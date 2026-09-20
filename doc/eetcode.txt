@@ -23,8 +23,8 @@ problem. Your code and the reference are executed over the same inputs and the
 outputs diffed, so no network round trip is needed to know whether you are
 right on the visible cases.
 
-Requires Neovim 0.10+ and `curl`. Local runs need `python3` and/or a C++17
-compiler.
+Requires Neovim 0.10+, `curl`, and telescope.nvim. Local runs need `python3`
+and/or a C++17 compiler.
 
 ==============================================================================
 2. SETUP                                                   *eetcode-setup*
@@ -57,24 +57,22 @@ Use `:EetCode logout leetcode` or `:EetCode logout neetcode` to remove one.
 4. COMMANDS                                             *eetcode-commands*
 
                                                                   *:EetCode*
-:EetCode [roadmap]     Open the NeetCode roadmap.
-:EetCode leetcode [q]  Search every LeetCode problem; q pre-filters the list.
+:EetCode               Open the current NeetCode roadmap.
+:EetCode roadmap [NAME]
+                       Open the roadmap, optionally selecting blind75,
+                       neetcode150, neetcode250, or allNC.
+:EetCode list [QUERY]  Fuzzy-search every LeetCode problem in a full-page
+                       Telescope picker.
 :EetCode random        Open a random accessible unsolved problem.
 :EetCode daily         Open LeetCode's problem of the day.
-:EetCode run           Run visible cases locally when a NeetCode oracle exists.
-:EetCode tests         Edit the local suite; add/remove cases separated by ---.
-:EetCode test-failed   Save the latest failed submission input to local tests.
-:EetCode submit        Submit through the provider shown in the results pane.
-:EetCode reset         Reset to the selected provider's starter code.
-:EetCode list [name]   blind75 | neetcode150 | neetcode250 | allNC
-                       With no argument, prints the current roadmap filter.
-:EetCode lang [name]   python | cpp | java | go | ...
-                       Only python and cpp run locally; cloud support depends
-                       on the active provider.
-:EetCode sync          Refresh both catalogs and unified progress.
+:EetCode lang [NAME]   Show or change the solution language.
 :EetCode status        Print both provider states.
 :EetCode login NAME    Log in to `leetcode` or `neetcode`.
 :EetCode logout NAME   Remove credentials for `leetcode` or `neetcode`.
+
+Problem actions use the buffer-local mappings below instead of duplicate Ex
+commands. Opening the roadmap or LeetCode finder automatically refreshes remote
+progress, the streak, and stale catalogs in the background.
 
 ==============================================================================
 5. MAPPINGS                                             *eetcode-mappings*
@@ -83,7 +81,6 @@ Roadmap ~
   h j k l / arrows      Move between topics
   <CR>                  Open the selected topic
   L / H                 Next / previous curated list
-  R                     Sync catalog and progress
   ?                     Help
   q                     Close
 
@@ -95,16 +92,16 @@ Problem list ~
   q                     Close
 
 LeetCode list ~
-  /                     Filter by number, title, slug, or difficulty
+  type                  Fuzzy-filter by number, title, slug, or difficulty
   <CR>                  Open the problem
-  o                     Open in a browser
-  R                     Refresh catalog, progress, and streak
-  q                     Close
+  <C-o>                 Open in a browser
+  <Esc>                 Close
 
 Solving ~
   <leader>nr            Run visible cases locally when available
   <leader>ns            Submit through the active provider
   <leader>nc            Toggle NeetCode completion
+  <leader>nR            Reset to the selected provider's starter code
   <leader>nol           Reopen using LeetCode
   <leader>non           Reopen using NeetCode
   <CR> or <Tab>         Statement window: toggle the hint under the cursor, or
@@ -134,17 +131,17 @@ Tree are judged by round-tripping the input through both halves.
 
 Problems that cannot be reproduced locally — SQL, and anything encoding
 arguments by reference such as clone-graph's adjacency list — say so plainly
-and direct you to |:EetCode| submit, which always works. C++ additionally
-cannot take vector<Interval>, which Python handles.
+and direct you to <leader>ns, which submits through the cloud judge. C++
+additionally cannot take vector<Interval>, which Python handles.
 
-Use :EetCode tests (<leader>nt) to add/remove local cases in an editor. Save
-with :w and close with :q. Local runs also save pending edits. The full suite
-is stored beside your solution as <solution-file>.cases, initially seeded
-with visible cases and legacy .tests extras. An empty suite runs no cases;
-delete the .cases file to restore the defaults. Changes affect local runs only.
+Use <leader>nt to add/remove local cases in an editor. Save with :w and close
+with :q. Local runs also save pending edits. The full suite is stored beside
+your solution as <solution-file>.cases, initially seeded with visible cases and
+legacy .tests extras. An empty suite runs no cases; delete the .cases file to
+restore the defaults. Changes affect local runs only.
 
-Use :EetCode test-failed (<leader>na) to add and save the latest failed
-submission input. Duplicate inputs are skipped.
+Use <leader>na to add and save the latest failed submission input. Duplicate
+inputs are skipped.
 
 Legacy extra test cases can be added in a file next to your solution named
 `<solution-file>.tests`, with cases separated by a line containing `---`: >
@@ -182,9 +179,10 @@ Defaults: >lua
         image_max_height = 18,
       },
       keys = {
-        roadmap = { open = "<CR>", quit = "q", cycle_list = "L", sync = "R" },
+        roadmap = { open = "<CR>", quit = "q", cycle_list = "L" },
         problem = {
           run = "<leader>nr", submit = "<leader>ns",
+          reset = "<leader>nR",
           open_leetcode = "<leader>nol", open_neetcode = "<leader>non",
           quit = "q",
         },

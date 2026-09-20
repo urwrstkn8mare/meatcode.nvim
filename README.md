@@ -29,9 +29,11 @@ diffs them, entirely on your machine — no rate limits, instant feedback.
 {
   "samits/eetCode.nvim",
   cmd = "EetCode",
-  -- Draws problem diagrams inline. Optional: without it, a diagram stays a
-  -- line you open in your browser.
-  dependencies = { "3rd/image.nvim" },
+  dependencies = {
+    "nvim-telescope/telescope.nvim", -- Full-page LeetCode finder.
+    -- Optional: draws problem diagrams inline.
+    "3rd/image.nvim",
+  },
   opts = {
     lang = "python",       -- or "cpp"
     list = "neetcode150",  -- blind75 | neetcode150 | neetcode250 | allNC
@@ -44,12 +46,18 @@ diffs them, entirely on your machine — no rate limits, instant feedback.
 <details><summary>packer.nvim</summary>
 
 ```lua
-use { "samits/eetCode.nvim", config = function() require("eetcode").setup({}) end }
+use {
+  "samits/eetCode.nvim",
+  requires = { "nvim-telescope/telescope.nvim" },
+  config = function() require("eetcode").setup({}) end,
+}
 ```
 
 </details>
 
-Requires Neovim 0.10+ and `curl`. Local runs need `python3` and/or a C++ compiler.
+Requires Neovim 0.10+, `curl`, and
+[Telescope](https://github.com/nvim-telescope/telescope.nvim). Local runs need
+`python3` and/or a C++ compiler.
 
 ## Log in
 
@@ -70,27 +78,26 @@ Use `:EetCode logout leetcode` or `:EetCode logout neetcode` to remove one.
 
 | Command | What it does |
 | --- | --- |
-| `:EetCode` | Open the NeetCode roadmap |
-| `:EetCode leetcode [query]` | Search all LeetCode problems |
+| `:EetCode` | Open the current NeetCode roadmap |
+| `:EetCode roadmap [name]` | Open a roadmap; optionally select `blind75`, `neetcode150`, `neetcode250`, or `allNC` |
+| `:EetCode list [query]` | Fuzzy-search every LeetCode problem |
 | `:EetCode random` | Open a random accessible unsolved LeetCode problem |
 | `:EetCode daily` | Open LeetCode's problem of the day |
-| `:EetCode run` | Run visible cases locally when a NeetCode oracle exists |
-| `:EetCode submit` | Submit through the provider shown in the problem view |
-| `:EetCode complete` | Toggle NeetCode completion; LeetCode requires acceptance |
-| `:EetCode reset` | Reset the open solution to its selected provider's starter |
-| `:EetCode list [name]` | Show or switch the roadmap's curated list |
-| `:EetCode lang [name]` | Show or switch the language |
-| `:EetCode sync` | Refresh both catalogs and unified progress |
+| `:EetCode lang [name]` | Show or change the solution language |
 | `:EetCode status` | Show both provider states |
+| `:EetCode login [provider]` | Log in to `leetcode` or `neetcode` |
+| `:EetCode logout [provider]` | Remove one provider's credentials |
 
-`list` takes `blind75`, `neetcode150`, `neetcode250` or `allNC`; `lang` takes
-`python`, `cpp`, or another language supported by the selected cloud judge.
-`L` / `H` on the roadmap cycle the curated list without typing a command.
+Problem actions are buffer-local mappings rather than duplicate commands; see
+[Solving](#solving). `L` / `H` on the roadmap also cycle its curated list.
 
-Progress shown in both lists is the union of both accounts. A LeetCode acceptance
-is also marked complete on NeetCode when that account is logged in. LeetCode
-does not expose an API to fabricate or remove an accepted submission, so
-NeetCode-only completions cannot change the status on leetcode.com.
+Progress shown in both lists is the union of both accounts. Opening the roadmap
+or LeetCode finder automatically refreshes provider progress, the streak, and
+stale catalogs in the background; cached data keeps both views instant and
+offline-safe. A LeetCode acceptance is also marked complete on NeetCode when
+that account is logged in. LeetCode does not expose an API to fabricate or
+remove an accepted submission, so NeetCode-only completions cannot change the
+status on leetcode.com.
 
 ### Roadmap
 
@@ -99,31 +106,48 @@ NeetCode-only completions cannot change the status on leetcode.com.
 | `h` `j` `k` `l` / arrows | Move between topics |
 | `<CR>` | Open the topic's problem list |
 | `L` / `H` | Next / previous curated list |
-| `R` | Sync catalog and progress |
+| `?` | Help |
+| `q` | Close |
 
 The terminal cursor is hidden while the roadmap has focus, since the selected
 node already shows where you are. Set `ui.hide_cursor = false` to keep it.
 
-### LeetCode list
+### LeetCode finder
 
-The list header shows the current LeetCode streak and whether today is complete,
-plus the `random` and `daily` commands. Press `/` to filter by problem number,
-title, slug, or difficulty; `<CR>` opens the selected problem.
+The full-page Telescope finder shows the problem count, current streak, and the
+`random` and `daily` commands. Type to fuzzy-filter by problem number, title,
+slug, or difficulty; `<CR>` opens the selected problem and `<C-o>` opens it in
+a browser.
+
+### Problem list
+
+| Key | Action |
+| --- | --- |
+| `<CR>` | Open the problem |
+| `<leader>nc` | Toggle solved |
+| `o` | Open on LeetCode |
+| `v` | Open the NeetCode video |
+| `q` | Close |
 
 ### Solving
 
 Problems opened from the roadmap, full list, random command, or daily command
 use LeetCode statements, starter code, and submissions by default. If a problem
 is LeetCode Premium and the signed-in user is not Premium, the matching
-NeetCode problem is used instead when available.
+NeetCode problem is used instead when available. The problem opens in a new
+tab: description on the left, your solution file on the right, results
+underneath. The solution is a **real file on disk**, so your LSP, treesitter,
+formatters and keymaps all work normally.
+
+Solutions live at `stdpath("data")/eetcode/solutions/<topic>/<problem>.<ext>`.
 
 | Key | Action |
 | --- | --- |
-| `<leader>nr` | Run visible cases locally when a NeetCode oracle exists |
-| `<leader>ns` | Submit to the provider shown in the results pane |
-| `<leader>nc` | Toggle NeetCode completion |
-| `<leader>nol` | Reopen the problem using LeetCode |
-| `<leader>non` | Reopen the problem using NeetCode |
+| `<leader>nr` | Run the visible test cases locally when available |
+| `<leader>ns` | Submit to LeetCode by default, or the active fallback provider |
+| `<leader>nc` | Toggle completed |
+| `<leader>nR` | Reset the solution to its provider's starter code |
+| `<leader>nol` / `<leader>non` | Switch the open problem's provider |
 | `<CR>` / `<Tab>` | In the statement: open the hint or diagram under the cursor |
 | `q` | Close the problem |
 
@@ -175,38 +199,12 @@ whatever exists on disk, so it stays consistent. An existing `.clangd` the
 plugin did not write is left alone only if it already matches `runner.cpp.cmd`
 (same `-std` / `-stdlib`); a stale or conflicting one is overwritten. Measured
 over seeded solutions, `clangd --check` goes from 1–4 errors per file to zero.
-| `?` | Help |
-| `q` | Close |
 
-### Problem list
-
-| Key | Action |
-| --- | --- |
-| `<CR>` | Open the problem |
-| `<leader>nc` | Toggle solved |
-| `o` | Open on LeetCode |
-| `v` | Open the NeetCode video |
-
-### Solving
-
-The problem opens in a new tab: description on the left, your solution file on
-the right, results underneath. The solution is a **real file on disk**, so your
-LSP, treesitter, formatters and keymaps all work normally.
-
-| Key | Action |
-| --- | --- |
-| `<leader>nr` | Run the visible test cases locally when available |
-| `<leader>ns` | Submit to LeetCode by default, or the active fallback provider |
-| `<leader>nc` | Toggle completed |
-| `<leader>nol` / `<leader>non` | Switch the open problem's provider |
-
-Solutions live at `stdpath("data")/eetcode/solutions/<topic>/<problem>.<ext>`.
-
-**Edit test cases.** Run `:EetCode tests` (`<leader>nt`) to edit the local suite.
-Add cases separated by a line containing `---`, or delete a whole case to remove
-it. Use `:w` to save and `:q` to close. Local runs also save pending edits.
-`:EetCode test-failed` (`<leader>na`) adds and saves the latest failed submission
-input, skipping duplicates. These cases only affect local runs.
+**Edit test cases.** Press `<leader>nt` to edit the local suite. Add cases
+separated by a line containing `---`, or delete a whole case to remove it. Use
+`:w` to save and `:q` to close. Local runs also save pending edits.
+`<leader>na` adds and saves the latest failed submission input, skipping
+duplicates. These cases only affect local runs.
 
 The edited suite is stored in `<solution-file>.cases`. Initially it includes the
 visible cases and any legacy `.tests` extras; once saved, it replaces that combined
@@ -276,7 +274,7 @@ require("eetcode").setup({
   lang = "python",
   solutions_dir = vim.fn.stdpath("data") .. "/eetcode/solutions",
   cache_dir = vim.fn.stdpath("cache") .. "/eetcode",
-  catalog_max_age = 24 * 60 * 60,   -- false to only refresh on :EetCode sync
+  catalog_max_age = 24 * 60 * 60,   -- background refresh age; false disables refresh
   timeout = 30,
   runner = {
     python = { cmd = { "python3" } },
@@ -285,9 +283,10 @@ require("eetcode").setup({
   },
   ui = { node_width = 24, border = "rounded" },
   keys = {
-    roadmap = { open = "<CR>", quit = "q", cycle_list = "L", sync = "R" },
+    roadmap = { open = "<CR>", quit = "q", cycle_list = "L" },
     problem = {
       run = "<leader>nr", submit = "<leader>ns", complete = "<leader>nc",
+      reset = "<leader>nR",
       open_leetcode = "<leader>nol", open_neetcode = "<leader>non", quit = "q",
     },
   },

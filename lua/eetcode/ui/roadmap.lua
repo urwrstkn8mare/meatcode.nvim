@@ -287,35 +287,12 @@ local function keymaps()
   map(keys.quit, M.close, "close")
   map("<Esc>", M.close, "close")
 
-  map(keys.sync, function()
-    util.notify("syncing catalog and progress…")
-    catalog.sync(function(err)
-      vim.schedule(function()
-        if err then
-          util.err("catalog sync failed: " .. err)
-        else
-          util.notify("catalog updated (" .. catalog.age_string() .. ")")
-          render()
-        end
-      end)
-    end)
-    progress.sync(function(err)
-      vim.schedule(function()
-        if err then
-          util.err("progress sync failed: " .. err)
-        else
-          render()
-        end
-      end)
-    end)
-  end, "sync")
 
   map("?", function()
     util.notify(table.concat({
       "hjkl / arrows  move between topics",
       keys.open .. "             open the selected topic",
       keys.cycle_list .. " / H          switch problem list",
-      keys.sync .. "              sync catalog + progress",
       keys.quit .. "              close",
     }, "\n"))
   end, "help")

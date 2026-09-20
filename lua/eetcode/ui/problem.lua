@@ -139,6 +139,7 @@ local function render_ready(s)
     "",
     string.format("  %s  run local tests      %s  submit to %s", keys.run, keys.submit, submit_provider),
     string.format("  %s  edit test cases      %s  add failed submission case", keys.tests, keys.test_failed),
+    string.format("  %s  toggle completed     %s  reset to starter code", keys.complete, keys.reset),
     string.format("  %s  use LeetCode         %s  use NeetCode", keys.open_leetcode, keys.open_neetcode),
     "",
     string.format("  %d visible test case(s) · %d hidden",
@@ -154,10 +155,11 @@ local function render_ready(s)
     { 1, 0, 100, "EetCodeKey" },
     { 2, 0, 100, "EetCodeKey" },
     { 3, 0, 100, "EetCodeKey" },
-    { 5, 0, 80, "EetCodeMuted" },
-    { 7, 0, 100, "EetCodeMuted" },
-    { 8, 0, 80, "EetCodeMuted" },
-    { 10, 0, 80, "EetCodeMuted" },
+    { 4, 0, 100, "EetCodeKey" },
+    { 6, 0, 80, "EetCodeMuted" },
+    { 8, 0, 100, "EetCodeMuted" },
+    { 9, 0, 80, "EetCodeMuted" },
+    { 11, 0, 80, "EetCodeMuted" },
   })
 end
 
@@ -678,6 +680,7 @@ local function keymaps(s)
     map(keys.tests, M.tests, "eetCode: edit test cases")
     map(keys.test_failed, M.test_failed, "eetCode: add failed submission case")
     map(keys.complete, M.toggle_complete, "eetCode: toggle completed")
+    map(keys.reset, M.reset, "eetCode: reset to starter code")
     map(keys.open_leetcode, function() M.switch("leetcode") end, "eetCode: use LeetCode")
     map(keys.open_neetcode, function() M.switch("neetcode") end, "eetCode: use NeetCode")
     -- A problem tab is one unit: closing a split closes the tab.

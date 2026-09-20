@@ -40,7 +40,7 @@ end
 local function summarize(report)
   if report.unsupported then
     report.error = (report.error or "unsupported")
-      .. " — use :EetCode submit to run this one in the cloud"
+      .. " — use " .. config.options.keys.problem.submit .. " to run this one in the cloud"
   end
   local passed = 0
   for _, c in ipairs(report.cases or {}) do

@@ -1,3 +1,4 @@
+local config = require("eetcode.config")
 local hl = require("eetcode.ui.highlight")
 
 --- Renders local run results and cloud submission verdicts into a panel buffer.
@@ -147,7 +148,8 @@ function M.render_submit(buf, data)
     block(lines, spans, "actual", failing.user_output, "EetCodeFail")
     block(lines, spans, "logs", failing.user_logs, "EetCodeMuted")
     if type(failing.input) == "string" and vim.trim(failing.input) ~= "" then
-      push(lines, spans, "  :EetCode test-failed to add this input to local tests", "EetCodeMuted")
+      push(lines, spans, "  " .. config.options.keys.problem.test_failed
+        .. " to add this input to local tests", "EetCodeMuted")
     end
   end
 

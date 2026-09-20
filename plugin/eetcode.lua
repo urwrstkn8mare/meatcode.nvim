@@ -4,24 +4,16 @@ end
 vim.g.loaded_eetcode = true
 
 local SUBCOMMANDS = {
-  roadmap = function() require("eetcode").roadmap() end,
-  leetcode = function(args) require("eetcode").leetcode(table.concat(args, " ")) end,
+  roadmap = function(args) require("eetcode").roadmap(args[1]) end,
+  list = function(args) require("eetcode").list(table.concat(args, " ")) end,
   random = function() require("eetcode").random() end,
   daily = function() require("eetcode").daily() end,
   login = function(args)
     require("eetcode").login(args[1], #args > 1 and table.concat(vim.list_slice(args, 2), " ") or nil)
   end,
   logout = function(args) require("eetcode").logout(args[1]) end,
-  sync = function() require("eetcode").sync() end,
   status = function() require("eetcode").status() end,
-  list = function(args) require("eetcode").set_list(args[1]) end,
   lang = function(args) require("eetcode").set_lang(args[1]) end,
-  run = function() require("eetcode").run() end,
-  submit = function() require("eetcode").submit() end,
-  complete = function() require("eetcode").complete() end,
-  reset = function() require("eetcode.ui.problem").reset() end,
-  tests = function() require("eetcode.ui.problem").tests() end,
-  ["test-failed"] = function() require("eetcode.ui.problem").test_failed() end,
 }
 
 vim.api.nvim_create_user_command("EetCode", function(cmd)
@@ -47,7 +39,7 @@ end, {
 
     local sub = parts[2]
     local candidates = {}
-    if sub == "list" then
+    if sub == "roadmap" then
       candidates = require("eetcode.catalog").LISTS
     elseif sub == "lang" then
       candidates = require("eetcode.lang").all()

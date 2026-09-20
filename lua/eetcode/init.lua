@@ -35,7 +35,14 @@ local TOKEN_SNIPPET = [[
 
 ]]
 
-function M.roadmap()
+function M.roadmap(list)
+  if list and list ~= "" then
+    if not vim.tbl_contains(catalog.LISTS, list) then
+      return util.err("unknown roadmap: " .. tostring(list)
+        .. " (expected one of " .. table.concat(catalog.LISTS, ", ") .. ")")
+    end
+    config.options.list = list
+  end
   require("eetcode.ui.roadmap").open()
 end
 
@@ -74,29 +81,6 @@ function M.logout(provider)
   util.notify("logged out of " .. (provider == "leetcode" and "LeetCode" or "NeetCode"))
 end
 
-function M.sync()
-  util.notify("syncing…")
-  catalog.sync(function(err)
-    if not err then leetcode_catalog.refresh_mappings() end
-    vim.schedule(function()
-      if err then
-        util.err("catalog sync failed: " .. err)
-      else
-        local cat = catalog.get()
-        util.notify(string.format("catalog updated: %d problems (bundle %s)",
-          #cat.problems, cat.hash or "?"))
-      end
-    end)
-  end)
-  progress.sync(function(err)
-    vim.schedule(function()
-      if err then
-        util.notify("progress not synced: " .. err, vim.log.levels.WARN)
-      end
-    end)
-  end)
-end
-
 function M.status()
   local cat = catalog.load()
   local lc = leetcode_catalog.load()
@@ -115,22 +99,6 @@ function M.status()
   }, "\n"))
 end
 
-function M.set_list(name)
-  if not name or name == "" then
-    return util.notify("list: " .. (catalog.LIST_LABELS[config.options.list] or config.options.list)
-      .. "\navailable: " .. table.concat(catalog.LISTS, ", "))
-  end
-  if not vim.tbl_contains(catalog.LISTS, name) then
-    return util.err("unknown list: " .. tostring(name) ..
-      " (expected one of " .. table.concat(catalog.LISTS, ", ") .. ")")
-  end
-  config.options.list = name
-  util.notify("list: " .. (catalog.LIST_LABELS[name] or name))
-  pcall(function()
-    require("eetcode.ui.roadmap").refresh()
-  end)
-end
-
 function M.set_lang(name)
   if not name or name == "" then
     return util.notify("language: " .. lang_info.name(config.options.lang))
@@ -142,11 +110,7 @@ function M.set_lang(name)
   util.notify("language: " .. lang_info.name(name))
 end
 
-function M.run()
-  require("eetcode.ui.problem").run()
-end
-
-function M.leetcode(query)
+function M.list(query)
   require("eetcode.ui.leetcode").open(query)
 end
 
@@ -203,21 +167,6 @@ function M.daily()
       open_problem(problem)
     end)
   end)
-end
-
-function M.submit()
-  require("eetcode.ui.problem").submit()
-end
-
---- Toggle completed for the selected problem list row, or the open problem.
-function M.complete()
-  if vim.bo.filetype == "eetcode-roadmap-problems" then
-    require("eetcode.ui.problems").toggle_complete()
-    return
-  elseif vim.bo.filetype == "eetcode-leetcode-problems" then
-    return util.err("LeetCode progress changes only after an accepted submission")
-  end
-  require("eetcode.ui.problem").toggle_complete()
 end
 
 function M.setup(opts)

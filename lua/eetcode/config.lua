@@ -14,8 +14,8 @@ local defaults = {
 	-- Cache for the scraped catalog and problem metadata.
 	cache_dir = vim.fn.stdpath("cache") .. "/eetcode",
 
-	-- Refresh the scraped catalog if the cached copy is older than this (seconds).
-	-- Set to false to only ever refresh via :EetCode sync.
+	-- Refresh cached catalogs in the background when they become this old.
+	-- Set to false to keep cached catalogs until they are missing.
 	catalog_max_age = 24 * 60 * 60,
 
 	-- Seconds before a network call is abandoned.
@@ -55,7 +55,6 @@ local defaults = {
 			open = "<CR>",
 			quit = "q",
 			cycle_list = "L",
-			sync = "R",
 		},
 		problem = {
 			run = "<leader>nr",
@@ -63,6 +62,7 @@ local defaults = {
 			tests = "<leader>nt",
 			test_failed = "<leader>na",
 			complete = "<leader>nc",
+			reset = "<leader>nR",
 			open_leetcode = "<leader>nol",
 			open_neetcode = "<leader>non",
 			quit = "q",

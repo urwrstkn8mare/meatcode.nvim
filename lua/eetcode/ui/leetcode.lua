@@ -1,227 +1,216 @@
 local auth = require("eetcode.api.leetcode_auth")
 local catalog = require("eetcode.catalog.leetcode")
 local nc_catalog = require("eetcode.catalog")
-local config = require("eetcode.config")
-local hl = require("eetcode.ui.highlight")
 local progress = require("eetcode.progress")
-local tabs = require("eetcode.ui.tab")
 local util = require("eetcode.util")
 
 local M = {}
 
 local state = {
-  buf = nil,
-  win = nil,
-  rows = {},
-  query = "",
+  picker = nil,
+  prompt_buf = nil,
   subscribed = false,
 }
 
-local function is_open()
-  return state.win and vim.api.nvim_win_is_valid(state.win)
-    and state.buf and vim.api.nvim_buf_is_valid(state.buf)
-end
-
 local function streak_text()
   if not auth.is_logged_in() then
-    return "Streak: log in with :EetCode login leetcode"
+    return "log in for streak"
   end
   local streak = catalog.streak()
   if not streak then
-    return "Streak: unavailable"
+    return "streak unavailable"
   end
   local days = tonumber(streak.streakCount) or 0
   local today = streak.currentDayCompleted and "today complete" or "solve one today"
-  return string.format("Streak: %d day%s · %s", days, days == 1 and "" or "s", today)
+  return string.format("%d day%s · %s", days, days == 1 and "" or "s", today)
 end
 
-local function matches(problem, query)
-  if query == "" then
-    return true
+local function telescope()
+  local modules = {}
+  for _, name in ipairs({
+    "telescope.pickers",
+    "telescope.finders",
+    "telescope.config",
+    "telescope.actions",
+    "telescope.actions.state",
+    "telescope.pickers.entry_display",
+  }) do
+    local ok, module = pcall(require, name)
+    if not ok then
+      return nil, "Telescope is required for :EetCode list"
+    end
+    modules[name] = module
   end
-  local haystack = table.concat({
-    problem.frontend_id or "",
-    problem.name or "",
-    problem.leetcode or "",
-    problem.difficulty or "",
-  }, " "):lower()
-  return haystack:find(query:lower(), 1, true) ~= nil
+  return modules
 end
 
-local function render()
-  if not is_open() then
+local function entries(modules)
+  local cat = catalog.get()
+  local displayer = modules["telescope.pickers.entry_display"].create({
+    separator = " ",
+    items = {
+      { width = 2 },
+      { width = 7 },
+      { remaining = true },
+      { width = 8 },
+      { width = 5 },
+    },
+  })
+
+  return modules["telescope.finders"].new_table({
+    results = cat and cat.problems or {},
+    entry_maker = function(problem)
+      local solved = progress.is_solved(problem)
+      return {
+        value = problem,
+        ordinal = table.concat({
+          problem.frontend_id or "",
+          problem.name or "",
+          problem.leetcode or "",
+          problem.difficulty or "",
+        }, " "),
+        display = function()
+          return displayer({
+            { solved and "✓" or "○", solved and "EetCodeDone" or "EetCodeTodo" },
+            problem.frontend_id ~= "" and (problem.frontend_id .. ".") or "",
+            solved and { problem.name, "EetCodeDone" } or problem.name,
+            { problem.difficulty, "EetCode" .. problem.difficulty },
+            problem.paid and { "[pro]", "EetCodeWarn" } or "",
+          })
+        end,
+      }
+    end,
+  })
+end
+
+local function picker_open()
+  return state.prompt_buf and vim.api.nvim_buf_is_valid(state.prompt_buf)
+end
+
+local function refresh()
+  if not picker_open() or not state.picker then
     return
   end
-  local cat = catalog.get()
-  local lines, spans = {}, {}
-  state.rows = {}
-
-  local count = cat and #cat.problems or 0
-  table.insert(lines, string.format("  LeetCode — %d problems · %s", count, streak_text()))
-  table.insert(spans, { 0, 0, #lines[1], "EetCodeHeader" })
-  table.insert(lines, "  / search   <CR> solve   o browser   R sync   :EetCode random   :EetCode daily")
-  table.insert(spans, { 1, 0, #lines[2], "EetCodeMuted" })
-  table.insert(lines, state.query ~= "" and ("  Search: " .. state.query) or "")
-  if state.query ~= "" then
-    table.insert(spans, { 2, 0, #lines[3], "EetCodeKey" })
+  local modules = telescope()
+  if modules then
+    local cat = catalog.get()
+    local title = string.format(" LeetCode · %d problems · %s ",
+      cat and #cat.problems or 0, streak_text())
+    state.picker.prompt_title = title
+    if state.picker.layout and state.picker.layout.prompt
+        and state.picker.layout.prompt.border then
+      state.picker.layout.prompt.border:change_title(title)
+    end
+    state.picker:refresh(entries(modules), { reset_prompt = false })
   end
-  table.insert(lines, "")
+end
 
-  if not cat then
-    table.insert(lines, "  Fetching all LeetCode problems…")
-    table.insert(spans, { #lines - 1, 0, #lines[#lines], "EetCodeMuted" })
-  else
-    for _, p in ipairs(cat.problems) do
-      if matches(p, state.query) then
-        local solved = progress.is_solved(p)
-        local mark = solved and "✓" or "○"
-        local lock = p.paid and "  [pro]" or ""
-        local number = p.frontend_id ~= "" and (p.frontend_id .. ".") or ""
-        local line = string.format("  %s  %-7s %-54s %-7s%s", mark, number, p.name, p.difficulty, lock)
-        table.insert(lines, line)
-        state.rows[#lines] = p
-        local row = #lines - 1
-        table.insert(spans, { row, 2, 2 + #mark, solved and "EetCodeDone" or "EetCodeTodo" })
-        if solved then
-          table.insert(spans, { row, 0, #line, "EetCodeDone" })
+local function open_picker(query)
+  local modules, err = telescope()
+  if not modules then
+    return util.err(err)
+  end
+
+  local actions = modules["telescope.actions"]
+  local action_state = modules["telescope.actions.state"]
+  local cat = catalog.get()
+  local count = cat and #cat.problems or 0
+
+  state.picker = modules["telescope.pickers"].new({}, {
+    prompt_title = string.format(" LeetCode · %d problems · %s ", count, streak_text()),
+    results_title = " <CR> solve · <C-o> browser · :EetCode random · :EetCode daily ",
+    finder = entries(modules),
+    sorter = modules["telescope.config"].values.generic_sorter({}),
+    previewer = false,
+    default_text = vim.trim(query or ""),
+    initial_mode = "insert",
+    sorting_strategy = "ascending",
+    layout_strategy = "vertical",
+    layout_config = {
+      width = 0.98,
+      height = 0.95,
+      prompt_position = "top",
+    },
+    attach_mappings = function(prompt_buf, map)
+      state.prompt_buf = prompt_buf
+      actions.select_default:replace(function()
+        local selected = action_state.get_selected_entry()
+        if not selected then
+          return
         end
-        local dcol = line:find(p.difficulty, 1, true)
-        if dcol then
-          table.insert(spans, { row, dcol - 1, dcol - 1 + #p.difficulty, hl.difficulty(p.difficulty) })
-        end
-        if p.paid then
-          table.insert(spans, { row, #line - #lock, #line, "EetCodeWarn" })
+        actions.close(prompt_buf)
+        state.prompt_buf, state.picker = nil, nil
+        require("eetcode.ui.problem").open(selected.value)
+      end)
+
+      local function open_browser()
+        local selected = action_state.get_selected_entry()
+        if selected then
+          vim.ui.open("https://leetcode.com/problems/" .. selected.value.leetcode .. "/")
         end
       end
-    end
-    if vim.tbl_isempty(state.rows) then
-      table.insert(lines, "  No problems match " .. vim.inspect(state.query))
-      table.insert(spans, { #lines - 1, 0, #lines[#lines], "EetCodeMuted" })
-    end
-  end
-
-  vim.bo[state.buf].modifiable = true
-  vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
-  vim.bo[state.buf].modifiable = false
-  hl.apply(state.buf, spans)
-end
-
-local function current()
-  if not is_open() then
-    return nil
-  end
-  return state.rows[vim.api.nvim_win_get_cursor(state.win)[1]]
-end
-
-function M.close()
-  if is_open() then
-    pcall(vim.api.nvim_win_close, state.win, true)
-  end
-  state.win, state.buf = nil, nil
-end
-
-local function search()
-  vim.ui.input({ prompt = "Search LeetCode: ", default = state.query }, function(input)
-    if input == nil then
-      return
-    end
-    state.query = vim.trim(input)
-    render()
-    if is_open() then
-      pcall(vim.api.nvim_win_set_cursor, state.win, { 5, 0 })
-    end
-  end)
-end
-
-local function keymaps()
-  local function map(lhs, fn, desc)
-    vim.keymap.set("n", lhs, fn, { buffer = state.buf, nowait = true, silent = true, desc = desc })
-  end
-  map("<CR>", function()
-    local problem = current()
-    if problem then
-      M.close()
-      require("eetcode.ui.problem").open(problem)
-    end
-  end, "solve problem")
-  map("/", search, "search all LeetCode problems")
-  map("o", function()
-    local problem = current()
-    if problem then
-      vim.ui.open("https://leetcode.com/problems/" .. problem.leetcode .. "/")
-    end
-  end, "open on LeetCode")
-  map("R", function()
-    util.notify("syncing LeetCode problems and progress…")
-    catalog.sync(function(err)
-      vim.schedule(function()
-        if err then util.err(err) else render() end
-      end)
-    end)
-  end, "sync LeetCode")
-  map("q", M.close, "close")
-  map("<Esc>", M.close, "close")
+      map("i", "<C-o>", open_browser)
+      map("n", "o", open_browser)
+      return true
+    end,
+  })
+  state.picker:find()
 end
 
 function M.open(query)
   nc_catalog.load()
+  catalog.load()
   catalog.refresh_mappings()
-  state.query = vim.trim(query or state.query or "")
-  if is_open() then
-    render()
-    vim.api.nvim_set_current_win(state.win)
+  progress.load()
+
+  if picker_open() then
+    local win = vim.fn.bufwinid(state.prompt_buf)
+    if win ~= -1 then
+      vim.api.nvim_set_current_win(win)
+    end
     return
   end
 
-  state.buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[state.buf].bufhidden = "wipe"
-  vim.bo[state.buf].filetype = "eetcode-leetcode-problems"
-  tabs.name_buffer(state.buf, "leetcode")
-  local width = math.min(vim.o.columns - 8, 104)
-  local height = math.min(vim.o.lines - 8, 34)
-  state.win = vim.api.nvim_open_win(state.buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
-    col = math.max(0, math.floor((vim.o.columns - width) / 2)),
-    style = "minimal",
-    border = config.options.ui.border,
-    title = " LeetCode Problems ",
-    title_pos = "center",
-  })
-  vim.wo[state.win].cursorline = true
-  keymaps()
-  render()
-  pcall(vim.api.nvim_win_set_cursor, state.win, { 5, 0 })
-  vim.api.nvim_create_autocmd("WinClosed", {
-    pattern = tostring(state.win),
-    once = true,
-    callback = function() state.win, state.buf = nil, nil end,
-  })
+  local function ready(err, cat)
+    vim.schedule(function()
+      if not cat then
+        return util.err("could not fetch LeetCode problems: " .. tostring(err or "empty catalog"))
+      end
+      if not picker_open() then
+        open_picker(query)
+      end
+    end)
+  end
+
+  local cached = catalog.get()
+  if cached then
+    open_picker(query)
+  else
+    util.notify("fetching LeetCode problems…")
+    catalog.ensure(ready)
+  end
+
+  -- Opening either top-level view refreshes remote progress, the catalog and the
+  -- streak in the background. Cached data keeps both views instant and offline-safe.
+  progress.sync(function(err)
+    if err and not catalog.get() then
+      vim.schedule(function() util.err("could not sync LeetCode problems: " .. err) end)
+    end
+  end)
 
   if not state.subscribed then
     state.subscribed = true
     catalog.on_update(function()
-      vim.schedule(function() pcall(render) end)
+      vim.schedule(refresh)
     end)
     progress.on_update(function()
-      vim.schedule(function() pcall(render) end)
+      vim.schedule(refresh)
     end)
   end
-
-  catalog.ensure(function(err)
-    vim.schedule(function()
-      if err and not catalog.get() then
-        util.err("could not fetch LeetCode problems: " .. err)
-      end
-      render()
-    end)
-  end)
 end
 
 function M.refresh()
-  render()
+  refresh()
 end
 
 return M
