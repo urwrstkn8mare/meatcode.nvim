@@ -23,6 +23,39 @@ query questionOfToday {
 }
 ]]
 
+local PROBLEMS_QUERY = [[
+query problemsetQuestionList($skip: Int!, $limit: Int!) {
+  problemsetQuestionList: questionList(categorySlug: "", skip: $skip, limit: $limit, filters: {}) {
+    total: totalNum
+    questions: data {
+      questionId
+      questionFrontendId
+      title
+      titleSlug
+      difficulty
+      isPaidOnly
+      status
+    }
+  }
+}
+]]
+
+local SUBMISSIONS_QUERY = [[
+query submissionList($offset: Int!, $limit: Int!, $lastKey: String) {
+  submissionList(offset: $offset, limit: $limit, lastKey: $lastKey) {
+    lastKey
+    hasNext
+    submissions {
+      id
+      lang
+      timestamp
+      statusDisplay
+      titleSlug
+    }
+  }
+}
+]]
+
 local QUESTION_QUERY = [[
 query questionData($titleSlug: String!) {
   question(titleSlug: $titleSlug) {
@@ -118,8 +151,35 @@ function M.lang(lang)
   return LANG_TO_LEETCODE[lang] or lang
 end
 
+-- Requests one page at a time rather than one giant call, matching what the
+-- site itself does.
+local PROBLEMS_PAGE_SIZE = 100
+local PROBLEMS_PAGE_DELAY_MS = 200
+
+--- The full LeetCode catalog (~3000 problems), via the GraphQL question list.
+--- The legacy REST `/api/problems/algorithms/` endpoint carries the same
+--- bulk-export bot-protection risk `/api/submissions/` did.
+---@param cb fun(err: string|nil, problems: table[]|nil)
 function M.problems(cb)
-  request({ name = "problem list", url = BASE .. "/api/problems/algorithms/", method = "GET" }, cb)
+  local all, skip = {}, 0
+  local function step()
+    graphql("problem list", PROBLEMS_QUERY, { skip = skip, limit = PROBLEMS_PAGE_SIZE }, function(err, data)
+      if err then
+        return cb(err, nil)
+      end
+      local list = data and data.problemsetQuestionList
+      if type(list) ~= "table" or type(list.questions) ~= "table" then
+        return cb("LeetCode returned an unexpected problem list response", nil)
+      end
+      vim.list_extend(all, list.questions)
+      skip = skip + PROBLEMS_PAGE_SIZE
+      if #list.questions > 0 and skip < (tonumber(list.total) or 0) then
+        return vim.defer_fn(step, PROBLEMS_PAGE_DELAY_MS)
+      end
+      cb(nil, all)
+    end)
+  end
+  step()
 end
 
 function M.daily(cb)
@@ -229,6 +289,44 @@ function M.submit(slug, question_id, code, lang, cb)
     end
     check(id, math.max(10, math.floor((config.options.timeout or 30) * 2)), cb)
   end)
+end
+
+--- One page of the account's full submission history (all problems, most
+--- recent first), via the same GraphQL endpoint the site itself uses.
+---
+--- The legacy REST `/api/submissions/` endpoint returns HTTP 403 for
+--- non-browser clients under LeetCode's bot protection even with a valid
+--- session cookie; this query does not.
+---@param offset integer
+---@param limit integer
+---@param last_key string|nil pagination cursor from the previous page
+---@param cb fun(err: string|nil, page: {submissions_dump: table[], has_next: boolean, last_key: string|nil}|nil)
+function M.submissions_page(offset, limit, last_key, cb)
+  if not auth.is_logged_in() then
+    return cb("not logged in to LeetCode — run :EetCode login leetcode", nil)
+  end
+  graphql("submission history", SUBMISSIONS_QUERY,
+    { offset = offset, limit = limit, lastKey = last_key },
+    function(err, data)
+      if err then
+        return cb(err, nil)
+      end
+      local list = data and data.submissionList
+      if type(list) ~= "table" then
+        return cb("LeetCode returned an unexpected submission history response", nil)
+      end
+      local dump = {}
+      for _, sub in ipairs(type(list.submissions) == "table" and list.submissions or {}) do
+        table.insert(dump, {
+          id = tonumber(sub.id),
+          lang = sub.lang,
+          status_display = sub.statusDisplay,
+          title_slug = sub.titleSlug,
+          timestamp = tonumber(sub.timestamp),
+        })
+      end
+      cb(nil, { submissions_dump = dump, has_next = list.hasNext == true, last_key = list.lastKey })
+    end)
 end
 
 return M

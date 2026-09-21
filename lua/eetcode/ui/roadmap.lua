@@ -82,7 +82,7 @@ local function summary_line(width)
   local list = config.options.list
   local left = string.format("  %s", catalog.LIST_LABELS[list] or list)
   local right = string.format(
-    "Easy %d/%d   Medium %d/%d   Hard %d/%d   ·   %d/%d solved  ",
+    "Easy %d/%d   Medium %d/%d   Hard %d/%d   ·   %d/%d completed  ",
     d.Easy.done, d.Easy.total, d.Medium.done, d.Medium.total,
     d.Hard.done, d.Hard.total, s.done, s.total)
 

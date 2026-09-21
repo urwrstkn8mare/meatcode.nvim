@@ -11,10 +11,6 @@ local function cache_path()
   return config.options.cache_dir .. "/leetcode-catalog.json"
 end
 
-local function difficulty(level)
-  return ({ "Easy", "Medium", "Hard" })[tonumber(level)] or "Unknown"
-end
-
 local function attach_neetcode(problem)
   local nc = nc_catalog.get()
   local mapped = nc and nc.by_leetcode[problem.leetcode] or nil
@@ -28,6 +24,9 @@ local function attach_neetcode(problem)
   return problem
 end
 
+--- Note: `raw` items are the flat GraphQL `questionList` shape
+--- (`questionId`, `questionFrontendId`, `title`, `titleSlug`, `difficulty`,
+--- `isPaidOnly`, `status`) — see `api/leetcode.lua`'s `M.problems`.
 local function index(raw, meta)
   local out = {
     problems = {},
@@ -37,22 +36,19 @@ local function index(raw, meta)
   }
 
   for _, item in ipairs(raw or {}) do
-    local stat = item.stat or item
-    if stat.question__hide ~= true then
-      local p = attach_neetcode({
-        provider = "leetcode",
-        leetcode_id = tostring(stat.question_id or item.leetcode_id or ""),
-        frontend_id = tostring(stat.frontend_question_id or item.frontend_id or ""),
-        name = stat.question__title or item.name,
-        leetcode = stat.question__title_slug or item.leetcode,
-        difficulty = item.difficulty and difficulty(item.difficulty.level) or item.difficulty_name or "Unknown",
-        paid = item.paid_only == true or item.paid == true,
-        leetcode_solved = item.status == "ac" or item.leetcode_solved == true,
-      })
-      if p.leetcode and p.name then
-        table.insert(out.problems, p)
-        out.by_leetcode[p.leetcode] = p
-      end
+    local p = attach_neetcode({
+      provider = "leetcode",
+      leetcode_id = tostring(item.questionId or ""),
+      frontend_id = tostring(item.questionFrontendId or ""),
+      name = item.title,
+      leetcode = item.titleSlug,
+      difficulty = item.difficulty or "Unknown",
+      paid = item.isPaidOnly == true,
+      leetcode_solved = item.status == "ac",
+    })
+    if p.leetcode and p.name then
+      table.insert(out.problems, p)
+      out.by_leetcode[p.leetcode] = p
     end
   end
 
@@ -107,8 +103,14 @@ function M.load(cb)
   end
   local cached = util.read_json(cache_path())
   if type(cached) == "table" and type(cached.problems) == "table" then
-    state.catalog = index(cached.problems, { fetched_at = cached.fetched_at, source = "cache" })
-    state.streak = type(cached.streak) == "table" and cached.streak or nil
+    -- An older cache in the pre-GraphQL REST shape indexes to zero problems;
+    -- treat that the same as no cache so `ensure()` forces a fresh sync
+    -- instead of serving an empty catalog.
+    local candidate = index(cached.problems, { fetched_at = cached.fetched_at, source = "cache" })
+    if #candidate.problems > 0 then
+      state.catalog = candidate
+      state.streak = type(cached.streak) == "table" and cached.streak or nil
+    end
   end
   if cb then cb(state.catalog) end
   return state.catalog
@@ -139,9 +141,8 @@ function M.sync(cb)
     for _, waiter in ipairs(waiters) do waiter(err, cat) end
   end
 
-  api.problems(function(err, payload)
+  api.problems(function(err, raw)
     if err then return finish(err, state.catalog) end
-    local raw = payload and payload.stat_status_pairs
     if type(raw) ~= "table" or #raw < 1000 then
       return finish("LeetCode returned an incomplete problem list", state.catalog)
     end

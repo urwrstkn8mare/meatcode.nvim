@@ -61,7 +61,6 @@ local defaults = {
 			submit = "<leader>ns",
 			tests = "<leader>nt",
 			test_failed = "<leader>na",
-			complete = "<leader>nc",
 			reset = "<leader>nR",
 			open_leetcode = "<leader>nol",
 			open_neetcode = "<leader>non",

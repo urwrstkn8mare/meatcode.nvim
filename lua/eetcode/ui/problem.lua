@@ -139,7 +139,6 @@ local function render_ready(s)
     "",
     string.format("  %s  run local tests      %s  submit to %s", keys.run, keys.submit, submit_provider),
     string.format("  %s  edit test cases      %s  add failed submission case", keys.tests, keys.test_failed),
-    string.format("  %s  toggle completed     %s  reset to starter code", keys.complete, keys.reset),
     string.format("  %s  use LeetCode         %s  use NeetCode", keys.open_leetcode, keys.open_neetcode),
     "",
     string.format("  %d visible test case(s) · %d hidden",
@@ -155,11 +154,10 @@ local function render_ready(s)
     { 1, 0, 100, "EetCodeKey" },
     { 2, 0, 100, "EetCodeKey" },
     { 3, 0, 100, "EetCodeKey" },
-    { 4, 0, 100, "EetCodeKey" },
-    { 6, 0, 80, "EetCodeMuted" },
-    { 8, 0, 100, "EetCodeMuted" },
-    { 9, 0, 80, "EetCodeMuted" },
-    { 11, 0, 80, "EetCodeMuted" },
+    { 5, 0, 80, "EetCodeMuted" },
+    { 7, 0, 100, "EetCodeMuted" },
+    { 8, 0, 80, "EetCodeMuted" },
+    { 10, 0, 80, "EetCodeMuted" },
   })
 end
 
@@ -304,7 +302,7 @@ local function render_description(s)
   clear_images(s)
   s.folds, s.images, s.links = description.render(
     s.desc_buf, s.problem, s.meta, s.sections,
-    { solved = progress.is_solved(s.problem) })
+    { completions = progress.completion_count(s.problem, s.lang) })
   render_images(s)
 end
 
@@ -348,8 +346,8 @@ function M.run()
 end
 
 local function accepted(s)
-  util.notify(s.problem.name .. " accepted")
-  progress.mark(s.problem, function() end)
+  local recorded = progress.record_acceptance(s.problem, s.lang)
+  util.notify(s.problem.name .. " accepted" .. (recorded and " · completion recorded" or " · already counted today"))
   pcall(render_description, s)
   pcall(function() require("eetcode.ui.roadmap").refresh() end)
   pcall(function() require("eetcode.ui.leetcode").refresh() end)
@@ -401,25 +399,6 @@ function M.submit()
   api.submit(s.problem.id, current_code(s), s.lang, done)
 end
 
---- Toggle the open problem as completed on neetcode.io.
-function M.toggle_complete()
-  local s = ready()
-  if not s then
-    return
-  end
-  progress.toggle(s.problem, function(err, solved)
-    vim.schedule(function()
-      if err then
-        return util.err(err)
-      end
-      util.notify(s.problem.name .. (solved and " marked complete" or " marked incomplete"))
-      pcall(render_description, s)
-      pcall(function()
-        require("eetcode.ui.roadmap").refresh()
-      end)
-    end)
-  end)
-end
 
 --- Restore the open problem to its starter code and clear its local test files.
 local function reset_local(s, starter)
@@ -461,12 +440,12 @@ function M.reset()
   s.failed_input = nil
   if s.provider == "leetcode" then
     render_ready(s)
-    return util.notify(s.problem.name .. " reset locally; LeetCode acceptance is unchanged")
+    return util.notify(s.problem.name .. " reset locally; completion count is unchanged")
   end
 
   s.busy = true
   results.running(s.res_buf, "Resetting " .. s.problem.name)
-  local pending, errors = 2, {}
+  local pending, errors = 1, {}
   local function done(label, err)
     if err then table.insert(errors, label .. ": " .. err) end
     pending = pending - 1
@@ -482,7 +461,6 @@ function M.reset()
       util.notify(s.problem.name .. " reset to starter code")
     end)
   end
-  progress.unmark(s.problem, function(err) done("could not mark incomplete", err) end)
   api.save_user_code(s.problem.id, s.lang, starter,
     function(err) done("could not sync starter code", err) end)
 end
@@ -679,7 +657,6 @@ local function keymaps(s)
     map(keys.submit, M.submit, "eetCode: submit to NeetCode")
     map(keys.tests, M.tests, "eetCode: edit test cases")
     map(keys.test_failed, M.test_failed, "eetCode: add failed submission case")
-    map(keys.complete, M.toggle_complete, "eetCode: toggle completed")
     map(keys.reset, M.reset, "eetCode: reset to starter code")
     map(keys.open_leetcode, function() M.switch("leetcode") end, "eetCode: use LeetCode")
     map(keys.open_neetcode, function() M.switch("neetcode") end, "eetCode: use NeetCode")

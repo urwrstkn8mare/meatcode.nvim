@@ -335,7 +335,7 @@ end
 ---@param problem table catalog entry
 ---@param meta table problem metadata
 ---@param sections table[] from M.sections
----@param opts table|nil {solved = boolean}
+---@param opts table|nil {completions = integer}
 ---@return table fold_rows, table image_rows, table link_rows
 function M.render(buf, problem, meta, sections, opts)
   local lines, marks = {}, {}
@@ -349,8 +349,8 @@ function M.render(buf, problem, meta, sections, opts)
   table.insert(lines, "")
 
   local badge = string.format("%s●  %s", INDENT, meta.difficulty)
-  local solved = (opts or {}).solved
-  local status = solved and "✓ Solved" or "○ Unsolved"
+  local completions = (opts or {}).completions or 0
+  local status = string.format("%d completion%s", completions, completions == 1 and "" or "s")
   local sep = "   ·   "
   local tail = string.format("%s%d hidden tests", sep, meta.test_case_count or 0)
 
@@ -360,7 +360,7 @@ function M.render(buf, problem, meta, sections, opts)
     hl_group = require("eetcode.ui.highlight").difficulty(meta.difficulty) } })
   table.insert(marks, { row, #badge, { end_col = #badge + #sep, hl_group = "EetCodeMuted" } })
   table.insert(marks, { row, #badge + #sep, { end_col = #badge + #sep + #status,
-    hl_group = solved and "EetCodeDone" or "EetCodeMuted" } })
+    hl_group = completions > 0 and "EetCodeDone" or "EetCodeMuted" } })
   table.insert(marks, { row, #badge + #sep + #status,
     { end_col = #badge + #sep + #status + #tail, hl_group = "EetCodeMuted" } })
   table.insert(lines, "")

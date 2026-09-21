@@ -38,21 +38,21 @@ local function render()
     end
   end
 
-  table.insert(lines, string.format("  %s — %d/%d solved · %s",
+  table.insert(lines, string.format("  %s — %d/%d completed · %s",
     state.pattern, done, #problems, catalog.LIST_LABELS[state.list] or state.list))
   table.insert(spans, { 0, 0, #lines[1], "EetCodeHeader" })
   table.insert(lines, "")
 
   for i, p in ipairs(problems) do
-    local solved = progress.is_solved(p)
-    local mark = solved and "✓" or "○"
+    local count = progress.completion_count(p)
+    local mark = string.format("%2d", count)
     local lock = p.pro and "  [pro]" or ""
     local line = string.format("  %s  %-52s %-7s%s", mark, p.name, p.difficulty, lock)
     table.insert(lines, line)
 
     local row = #lines - 1
-    table.insert(spans, { row, 2, 2 + #mark, solved and "EetCodeDone" or "EetCodeTodo" })
-    if solved then
+    table.insert(spans, { row, 2, 2 + #mark, count > 0 and "EetCodeDone" or "EetCodeTodo" })
+    if count > 0 then
       table.insert(spans, { row, 0, #line, "EetCodeDone" })
     end
     local dcol = line:find(p.difficulty, 1, true)
@@ -97,7 +97,6 @@ local function keymaps()
   map("q", M.close, "close")
   map("<Esc>", M.close, "close")
 
-  map(config.options.keys.problem.complete, function() M.toggle_complete() end, "toggle solved")
 
   map("o", function()
     local p = current()
@@ -116,19 +115,6 @@ local function keymaps()
   end, "open the NeetCode video")
 end
 
---- Toggle the problem under the cursor as completed.
-function M.toggle_complete()
-  local p = current()
-  if not p then
-    return
-  end
-  progress.toggle(p, function(err)
-    vim.schedule(function()
-      if err then util.err(err) end
-    end)
-  end)
-  render()
-end
 
 function M.open(pattern, list)
   if not pattern then

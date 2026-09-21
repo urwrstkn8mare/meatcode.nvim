@@ -61,8 +61,8 @@ Requires Neovim 0.10+, `curl`, and
 
 ## Log in
 
-Browsing and opening free problems works signed out. Submission and remote
-progress sync require the corresponding account:
+Browsing and opening free problems works signed out. Submission requires an
+account with the selected provider.
 
 - `:EetCode login leetcode` explains how to copy the complete Cookie request
   header from a signed-in `leetcode.com` browser tab. The cookie must include
@@ -81,7 +81,7 @@ Use `:EetCode logout leetcode` or `:EetCode logout neetcode` to remove one.
 | `:EetCode` | Open the current NeetCode roadmap |
 | `:EetCode roadmap [name]` | Open a roadmap; optionally select `blind75`, `neetcode150`, `neetcode250`, or `allNC` |
 | `:EetCode list [query]` | Fuzzy-search every LeetCode problem |
-| `:EetCode random` | Open a random accessible unsolved LeetCode problem |
+| `:EetCode random` | Open a random accessible problem with no completions in the selected language |
 | `:EetCode daily` | Open LeetCode's problem of the day |
 | `:EetCode lang [name]` | Show or change the solution language |
 | `:EetCode status` | Show both provider states |
@@ -91,13 +91,27 @@ Use `:EetCode logout leetcode` or `:EetCode logout neetcode` to remove one.
 Problem actions are buffer-local mappings rather than duplicate commands; see
 [Solving](#solving). `L` / `H` on the roadmap also cycle its curated list.
 
-Progress shown in both lists is the union of both accounts. Opening the roadmap
-or LeetCode finder automatically refreshes provider progress, the streak, and
-stale catalogs in the background; cached data keeps both views instant and
-offline-safe. A LeetCode acceptance is also marked complete on NeetCode when
-that account is logged in. LeetCode does not expose an API to fabricate or
-remove an accepted submission, so NeetCode-only completions cannot change the
-status on leetcode.com.
+Completion counts are recorded from accepted cloud submissions in the selected
+language. LeetCode and NeetCode accepts share one local history, and repeated
+accepts for a problem on the same calendar day count once — regardless of how
+many submissions landed that day or which provider they came from. Opening the
+roadmap or LeetCode finder refreshes stale catalogs and the streak in the
+background; completion history remains available offline.
+
+Checking completion history for a language walks each provider's full
+submission history the first time: LeetCode's account submission log, and
+NeetCode's daily activity log (the same data behind its streak calendar). This
+happens automatically the first time the roadmap or LeetCode finder opens for
+that language. After that, each further open opportunistically looks for
+submissions made *outside* this plugin since the last check — a stored cursor
+(last-seen LeetCode submission id, last-checked NeetCode day) lets it fetch
+just what's new instead of re-walking history, so it stays cheap on every
+launch. Each check notifies when it starts and again with a summary when it
+finishes (a long first-time walk also reports progress along the way), so a
+quiet "submissions up to date" confirms nothing was missed. A provider you
+aren't logged into is skipped without a notification. LeetCode's day boundary
+is your local timezone and NeetCode's is UTC, so a submission near midnight
+can occasionally land in the count for the adjacent day on one provider.
 
 ### Roadmap
 
@@ -124,7 +138,7 @@ a browser.
 | Key | Action |
 | --- | --- |
 | `<CR>` | Open the problem |
-| `<leader>nc` | Toggle solved |
+| `0`, `1`, … | Completion days for the selected language |
 | `o` | Open on LeetCode |
 | `v` | Open the NeetCode video |
 | `q` | Close |
@@ -145,7 +159,6 @@ Solutions live at `stdpath("data")/eetcode/solutions/<topic>/<problem>.<ext>`.
 | --- | --- |
 | `<leader>nr` | Run the visible test cases locally when available |
 | `<leader>ns` | Submit to LeetCode by default, or the active fallback provider |
-| `<leader>nc` | Toggle completed |
 | `<leader>nR` | Reset the solution to its provider's starter code |
 | `<leader>nol` / `<leader>non` | Switch the open problem's provider |
 | `<CR>` / `<Tab>` | In the statement: open the hint or diagram under the cursor |
@@ -285,7 +298,7 @@ require("eetcode").setup({
   keys = {
     roadmap = { open = "<CR>", quit = "q", cycle_list = "L" },
     problem = {
-      run = "<leader>nr", submit = "<leader>ns", complete = "<leader>nc",
+      run = "<leader>nr", submit = "<leader>ns",
       reset = "<leader>nR",
       open_leetcode = "<leader>nol", open_neetcode = "<leader>non", quit = "q",
     },

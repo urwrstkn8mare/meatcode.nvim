@@ -40,8 +40,8 @@ Then run |:EetCode|.
 ==============================================================================
 3. AUTHENTICATION                                           *eetcode-auth*
 
-Browsing works signed out. Submission and remote progress sync require the
-corresponding account.
+Browsing works signed out. Submission requires an account with the selected
+provider.
 
 Run `:EetCode login leetcode` to see how to copy the complete Cookie request
 header from a signed-in leetcode.com tab. It must contain LEETCODE_SESSION and
@@ -71,8 +71,12 @@ Use `:EetCode logout leetcode` or `:EetCode logout neetcode` to remove one.
 :EetCode logout NAME   Remove credentials for `leetcode` or `neetcode`.
 
 Problem actions use the buffer-local mappings below instead of duplicate Ex
-commands. Opening the roadmap or LeetCode finder automatically refreshes remote
-progress, the streak, and stale catalogs in the background.
+commands. Accepted cloud submissions are counted in the selected language; an
+accept on either provider counts once per calendar day, regardless of how many
+submissions landed that day. The first check for a language walks each
+provider's full history automatically; after that, opening the roadmap or
+LeetCode finder cheaply checks for anything new via a stored cursor. Each
+check notifies when it starts and when it finishes, even when nothing changed.
 
 ==============================================================================
 5. MAPPINGS                                             *eetcode-mappings*
@@ -86,7 +90,7 @@ Roadmap ~
 
 Problem list ~
   <CR>                  Open the problem
-  t                     Toggle solved
+  0, 1, …              Completion days for the selected language
   o                     Open on LeetCode
   v                     Open the NeetCode video
   q                     Close
@@ -100,7 +104,6 @@ LeetCode list ~
 Solving ~
   <leader>nr            Run visible cases locally when available
   <leader>ns            Submit through the active provider
-  <leader>nc            Toggle NeetCode completion
   <leader>nR            Reset to the selected provider's starter code
   <leader>nol           Reopen using LeetCode
   <leader>non           Reopen using NeetCode

@@ -49,7 +49,7 @@ local function entries(modules)
   local displayer = modules["telescope.pickers.entry_display"].create({
     separator = " ",
     items = {
-      { width = 2 },
+      { width = 4 },
       { width = 7 },
       { remaining = true },
       { width = 8 },
@@ -60,7 +60,7 @@ local function entries(modules)
   return modules["telescope.finders"].new_table({
     results = cat and cat.problems or {},
     entry_maker = function(problem)
-      local solved = progress.is_solved(problem)
+      local count = progress.completion_count(problem)
       return {
         value = problem,
         ordinal = table.concat({
@@ -71,9 +71,9 @@ local function entries(modules)
         }, " "),
         display = function()
           return displayer({
-            { solved and "✓" or "○", solved and "EetCodeDone" or "EetCodeTodo" },
+            { tostring(count), count > 0 and "EetCodeDone" or "EetCodeTodo" },
             problem.frontend_id ~= "" and (problem.frontend_id .. ".") or "",
-            solved and { problem.name, "EetCodeDone" } or problem.name,
+            count > 0 and { problem.name, "EetCodeDone" } or problem.name,
             { problem.difficulty, "EetCode" .. problem.difficulty },
             problem.paid and { "[pro]", "EetCodeWarn" } or "",
           })
@@ -190,8 +190,8 @@ function M.open(query)
     catalog.ensure(ready)
   end
 
-  -- Opening either top-level view refreshes remote progress, the catalog and the
-  -- streak in the background. Cached data keeps both views instant and offline-safe.
+  -- Opening either top-level view refreshes the catalog and streak in the
+  -- background. Completion history stays local and offline-safe.
   progress.sync(function(err)
     if err and not catalog.get() then
       vim.schedule(function() util.err("could not sync LeetCode problems: " .. err) end)

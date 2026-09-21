@@ -7,7 +7,6 @@ local client = require("eetcode.api.client")
 --- see doc/api.md for the full map.
 local M = {}
 
-M.LEETCODE_URL = "https://leetcode.com/problems/"
 
 --- Run `fn(token, cb)` with a fresh ID token, short-circuiting on auth failure.
 local function authed(fn, cb)
@@ -64,33 +63,6 @@ function M.submit(problem_id, code, lang, cb)
   end, cb)
 end
 
---- Completed problems, keyed by roadmap pattern, valued as LeetCode URLs.
----@param cb fun(err: string|nil, completed: table<string, string[]>|nil)
-function M.completed(cb)
-  authed(function(token, done)
-    client.dispatch("getCompletedProblems", {}, { token = token }, done)
-  end, cb)
-end
-
---- Mark a problem solved. `topic` is the roadmap pattern, `problem` the full
---- LeetCode URL — the same shape `completed` returns.
-function M.mark_complete(topic, leetcode_slug, cb)
-  authed(function(token, done)
-    client.dispatch("markProblemComplete", {
-      topic = topic,
-      problem = M.LEETCODE_URL .. leetcode_slug .. "/",
-    }, { token = token }, done)
-  end, cb)
-end
-
-function M.mark_incomplete(topic, leetcode_slug, cb)
-  authed(function(token, done)
-    client.dispatch("markProblemIncomplete", {
-      topic = topic,
-      problem = M.LEETCODE_URL .. leetcode_slug .. "/",
-    }, { token = token }, done)
-  end, cb)
-end
 
 --- Code the user last saved on neetcode.io for a problem.
 function M.user_code(problem_id, cb)
@@ -124,6 +96,24 @@ end
 function M.user_stats(cb)
   authed(function(token, done)
     client.dispatch("getUserStats", {}, { token = token }, done)
+  end, cb)
+end
+
+--- Per-day activity summary used by the streak calendar: a map of
+--- "YYYY-MM-DD" (UTC) to `{count = integer}`, plus `joined` (account creation
+--- date). Days with `count == 0` have no recorded activity.
+function M.streak_data(cb)
+  authed(function(token, done)
+    client.dispatch("getUserStreakData", {}, { token = token }, done)
+  end, cb)
+end
+
+--- Every run/submission recorded on one UTC calendar day.
+---@param date string "YYYY-MM-DD"
+---@param cb fun(err: string|nil, activity: {submissions: table[]}|nil)
+function M.day_activity(date, cb)
+  authed(function(token, done)
+    client.dispatch("getUserDailyActivity", { date = date }, { token = token }, done)
   end, cb)
 end
 

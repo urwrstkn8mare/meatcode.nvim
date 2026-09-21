@@ -1,60 +1,47 @@
-local api = require("eetcode.api")
-local auth = require("eetcode.api.auth")
 local catalog = require("eetcode.catalog")
 local config = require("eetcode.config")
+local lang_info = require("eetcode.lang")
+local leetcode_api = require("eetcode.api.leetcode")
 local leetcode_auth = require("eetcode.api.leetcode_auth")
 local leetcode_catalog = require("eetcode.catalog.leetcode")
+local nc_api = require("eetcode.api")
+local nc_auth = require("eetcode.api.auth")
 local util = require("eetcode.util")
 
---- Unified progress keyed by LeetCode slug. The provider-specific sets are
---- retained so either service can refresh without erasing the other one.
+--- Completion history keyed by language, then LeetCode slug, then local calendar
+--- day. An accepted submission can count once per day regardless of provider.
 local M = {}
 
 local state = {
-  solved = nil,
-  neetcode = nil,
-  leetcode = nil,
+  completions = nil,
+  cursors = nil,
   listeners = {},
-  fetching = false,
+  checking = false,
 }
 
 local function cache_path()
   return config.options.cache_dir .. "/progress.json"
 end
 
-local function slug_from_url(url)
-  return type(url) == "string" and url:match("problems/([^/]+)") or nil
-end
-
-local function rebuild()
-  state.solved = {}
-  for slug in pairs(state.neetcode or {}) do
-    state.solved[slug] = true
-  end
-  for slug in pairs(state.leetcode or {}) do
-    state.solved[slug] = true
-  end
-end
-
 local function load_cache()
-  if state.solved then
-    return state.solved
+  if state.completions then
+    return state.completions
   end
   local cached = util.read_json(cache_path())
-  local old = type(cached) == "table" and type(cached.solved) == "table" and cached.solved or {}
-  state.neetcode = type(cached) == "table" and type(cached.neetcode) == "table"
-    and cached.neetcode or vim.deepcopy(old)
-  state.leetcode = type(cached) == "table" and type(cached.leetcode) == "table"
-    and cached.leetcode or {}
-  rebuild()
-  return state.solved
+  state.completions = type(cached) == "table" and type(cached.completions) == "table"
+    and cached.completions or {}
+  local cursors = type(cached) == "table" and cached.cursors or nil
+  state.cursors = {
+    leetcode = type(cursors) == "table" and type(cursors.leetcode) == "table" and cursors.leetcode or {},
+    neetcode = type(cursors) == "table" and type(cursors.neetcode) == "table" and cursors.neetcode or {},
+  }
+  return state.completions
 end
 
 local function persist()
   util.write_json(cache_path(), {
-    solved = state.solved,
-    neetcode = state.neetcode,
-    leetcode = state.leetcode,
+    completions = state.completions,
+    cursors = state.cursors,
     updated_at = os.time(),
   })
 end
@@ -69,9 +56,25 @@ local function emit()
   end
 end
 
+--- Return how many calendar days contain an accepted submission for this problem
+--- in `lang`. The configured language is used when it is omitted.
+---@param problem table
+---@param lang string|nil
+---@return integer
+function M.completion_count(problem, lang)
+  if not problem.leetcode then
+    return 0
+  end
+  local days = load_cache()[lang or config.options.lang]
+  local completed = days and days[problem.leetcode] or nil
+  if type(completed) ~= "table" then
+    return 0
+  end
+  return vim.tbl_count(completed)
+end
+
 function M.is_solved(problem)
-  local solved = load_cache()
-  return problem.leetcode ~= nil and solved[problem.leetcode] == true
+  return M.completion_count(problem) > 0
 end
 
 function M.pattern_progress(pattern, list)
@@ -110,107 +113,262 @@ function M.summary(list)
   return out
 end
 
-local function neetcode_solved(completed)
-  local solved = {}
-  for _, urls in pairs(completed or {}) do
-    for _, url in ipairs(urls) do
-      local slug = slug_from_url(url)
-      if slug then solved[slug] = true end
-    end
+--- Record one accepted submission on `day` ("YYYY-MM-DD"; defaults to today in
+--- local time). Multiple accepts through LeetCode and NeetCode on the same
+--- calendar day share one completion.
+---@param problem table
+---@param lang string
+---@param day string|nil
+---@return boolean recorded Whether this was a new completion day.
+function M.record_acceptance(problem, lang, day)
+  if not problem.leetcode then
+    return false
   end
-  return solved
+  local completions = load_cache()
+  local by_language = completions[lang]
+  if type(by_language) ~= "table" then
+    by_language = {}
+    completions[lang] = by_language
+  end
+  local days = by_language[problem.leetcode]
+  if type(days) ~= "table" then
+    days = {}
+    by_language[problem.leetcode] = days
+  end
+
+  day = day or os.date("%Y-%m-%d")
+  if days[day] then
+    return false
+  end
+  days[day] = true
+  persist()
+  emit()
+  return true
 end
 
-local function leetcode_solved(cat)
-  local solved = {}
-  for _, problem in ipairs((cat and cat.problems) or {}) do
-    if problem.leetcode_solved then solved[problem.leetcode] = true end
-  end
-  return solved
-end
+-- A hard ceiling on pagination so a runaway `has_next` cannot hang forever.
+local MAX_LEETCODE_PAGES = 1000
+local LEETCODE_PAGE_SIZE = 20
+local SYNC_DELAY_MS = 300
+-- How often (in submissions/days checked) a long first-time walk reports
+-- progress. A same-day incremental check rarely reaches this and stays quiet.
+local PROGRESS_EVERY = 5
 
---- Refresh both providers and expose their union everywhere in the plugin.
---- Accepted LeetCode submissions are also recorded on NeetCode as they happen;
---- LeetCode itself has no API for fabricating an accepted submission.
-function M.sync(cb)
-  cb = cb or function() end
+--- Fetch and record accepted LeetCode submissions in `lang`. Incremental:
+--- paging stops as soon as the last-seen submission id (persisted per
+--- language) reappears, so a launch with nothing new costs one page. A
+--- language with no stored cursor yet walks the full account history once,
+--- then stays incremental from then on.
+---@param lang string
+---@param cb fun(err: string|nil, totals: {checked: integer, recorded: integer}|nil)
+---@param on_progress fun(checked: integer, recorded: integer)|nil
+function M.sync_leetcode(lang, cb, on_progress)
   load_cache()
-  if state.fetching then return cb(nil) end
-  state.fetching = true
+  local stop_at_id = state.cursors.leetcode[lang]
+  local remote_lang = leetcode_api.lang(lang)
+  local offset, last_key, checked, recorded = 0, nil, 0, 0
+  local newest_id = nil
 
-  local pending, errors = 0, {}
-  local function begin() pending = pending + 1 end
-  local function done(err)
-    if err then table.insert(errors, err) end
-    pending = pending - 1
-    if pending > 0 then return end
-    state.fetching = false
-    rebuild()
-    persist()
-    emit()
-    cb(#errors > 0 and table.concat(errors, "; ") or nil)
+  local function finish(err, result)
+    if not err and newest_id then
+      state.cursors.leetcode[lang] = newest_id
+      persist()
+    end
+    cb(err, result)
   end
 
-  if auth.is_logged_in() then
-    begin()
-    api.completed(function(err, completed)
-      if not err then state.neetcode = neetcode_solved(completed) end
-      done(err and ("NeetCode: " .. err) or nil)
+  local function step(page)
+    if page > MAX_LEETCODE_PAGES then
+      return finish(nil, { checked = checked, recorded = recorded, truncated = true })
+    end
+    leetcode_api.submissions_page(offset, LEETCODE_PAGE_SIZE, last_key, function(err, page_data)
+      if err then
+        return finish(err, nil)
+      end
+      local dump = type(page_data.submissions_dump) == "table" and page_data.submissions_dump or {}
+      for _, sub in ipairs(dump) do
+        if stop_at_id and sub.id == stop_at_id then
+          return finish(nil, { checked = checked, recorded = recorded })
+        end
+        newest_id = newest_id or sub.id -- the feed is newest-first
+        checked = checked + 1
+        if sub.status_display == "Accepted" and sub.lang == remote_lang
+          and type(sub.title_slug) == "string" and sub.title_slug ~= "" then
+          local day = os.date("%Y-%m-%d", tonumber(sub.timestamp))
+          if M.record_acceptance({ leetcode = sub.title_slug }, lang, day) then
+            recorded = recorded + 1
+          end
+        end
+      end
+      if on_progress then on_progress(checked, recorded) end
+      if page_data.has_next then
+        offset = offset + LEETCODE_PAGE_SIZE
+        last_key = page_data.last_key
+        vim.defer_fn(function() step(page + 1) end, SYNC_DELAY_MS)
+      else
+        finish(nil, { checked = checked, recorded = recorded })
+      end
     end)
   end
+  step(1)
+end
 
-  begin()
-  leetcode_catalog.sync(function(err, cat)
-    if not err and leetcode_auth.is_logged_in() then
-      state.leetcode = leetcode_solved(cat)
+--- Fetch and record accepted NeetCode submissions in `lang` from the daily
+--- activity log (the data backing the streak calendar).
+---
+--- Incremental: only days on or after the persisted cursor date are
+--- re-fetched (the boundary day is re-checked too, since NeetCode buckets by
+--- UTC day and late submissions can still land on an already-seen day before
+--- the next check). A language with no stored cursor yet walks every day with
+--- recorded activity.
+---@param lang string
+---@param cb fun(err: string|nil, totals: {checked: integer, recorded: integer}|nil)
+---@param on_progress fun(checked: integer, recorded: integer)|nil
+function M.sync_neetcode(lang, cb, on_progress)
+  load_cache()
+  catalog.load()
+  local cursor_date = state.cursors.neetcode[lang]
+
+  nc_api.streak_data(function(err, streak)
+    if err then
+      return cb(err, nil)
     end
-    done(err and ("LeetCode: " .. err) or nil)
+    local dates = {}
+    for date, info in pairs((type(streak) == "table" and streak.activityByDate) or {}) do
+      if type(info) == "table" and (tonumber(info.count) or 0) > 0
+        and (not cursor_date or date >= cursor_date) then
+        table.insert(dates, date)
+      end
+    end
+    table.sort(dates)
+
+    local checked, recorded, idx = 0, 0, 0
+    local newest_date = cursor_date
+    local function step()
+      idx = idx + 1
+      local date = dates[idx]
+      if not date then
+        if newest_date then
+          state.cursors.neetcode[lang] = newest_date
+          persist()
+        end
+        return cb(nil, { checked = checked, recorded = recorded })
+      end
+      nc_api.day_activity(date, function(day_err, activity)
+        if not day_err and type(activity) == "table" and type(activity.submissions) == "table" then
+          local cat = catalog.get()
+          for _, sub in ipairs(activity.submissions) do
+            checked = checked + 1
+            if sub.status == "Accepted" and sub.language == lang
+              and type(sub.problemId) == "string" then
+              local entry = cat and cat.by_id[sub.problemId]
+              if entry and entry.leetcode
+                and M.record_acceptance({ leetcode = entry.leetcode }, lang, date) then
+                recorded = recorded + 1
+              end
+            end
+          end
+        end
+        if not newest_date or date > newest_date then
+          newest_date = date
+        end
+        if on_progress then on_progress(checked, recorded) end
+        vim.defer_fn(step, SYNC_DELAY_MS)
+      end)
+    end
+    step()
   end)
 end
 
-function M.mark(problem, cb)
-  cb = cb or function() end
-  load_cache()
-  if not problem.leetcode then return cb("problem has no LeetCode mapping") end
-
-  if problem.provider == "leetcode" then
-    state.leetcode[problem.leetcode] = true
+--- Throttled "still working" notifier for a long first-time walk. Silent for
+--- a fast incremental check (the common case), since it rarely reaches
+--- `PROGRESS_EVERY` submissions checked before finishing.
+local function progress_reporter(provider)
+  local last_notified = 0
+  return function(checked)
+    if checked - last_notified < PROGRESS_EVERY then
+      return
+    end
+    last_notified = checked
+    vim.schedule(function()
+      util.notify(string.format("%s: %d submissions checked…", provider, checked))
+    end)
   end
-  state.neetcode[problem.leetcode] = true
-  rebuild()
-  persist()
-  emit()
-
-  if problem.id and problem.pattern and auth.is_logged_in() then
-    return api.mark_complete(problem.pattern, problem.leetcode, cb)
-  end
-  cb(nil)
 end
 
-function M.unmark(problem, cb)
+--- Pick up accepted submissions made since the last check, for `lang`. A
+--- language checked for the first time walks its full provider history once
+--- and is incremental on every call after that. Notifies when the check
+--- starts and again with a summary when it finishes; a provider that isn't
+--- logged in is skipped without a notification.
+---@param lang string|nil defaults to the configured language
+---@param cb fun(err: string|nil, totals: {checked: integer, recorded: integer}|nil)
+function M.check_new(lang, cb)
   cb = cb or function() end
-  load_cache()
-  if not problem.leetcode then return cb("problem has no LeetCode mapping") end
-  if state.leetcode[problem.leetcode] then
-    return cb("LeetCode accepted problems cannot be marked incomplete")
+  lang = lang or config.options.lang
+
+  local run_leetcode = leetcode_auth.is_logged_in()
+  local run_neetcode = nc_auth.is_logged_in()
+  if not run_leetcode and not run_neetcode then
+    return cb(nil, { checked = 0, recorded = 0 })
   end
 
-  state.neetcode[problem.leetcode] = nil
-  rebuild()
-  persist()
-  emit()
-  if problem.id and problem.pattern and auth.is_logged_in() then
-    return api.mark_incomplete(problem.pattern, problem.leetcode, cb)
+  util.notify(string.format("checking for new %s submissions…", lang_info.name(lang)))
+
+  local errors, pending = {}, (run_leetcode and 1 or 0) + (run_neetcode and 1 or 0)
+  local totals = { checked = 0, recorded = 0 }
+  local function done(label, err, result)
+    if err then
+      table.insert(errors, label .. ": " .. err)
+    elseif result then
+      totals.checked = totals.checked + (result.checked or 0)
+      totals.recorded = totals.recorded + (result.recorded or 0)
+    end
+    pending = pending - 1
+    if pending > 0 then
+      return
+    end
+    vim.schedule(function()
+      if #errors > 0 then
+        util.err("submissions check failed: " .. table.concat(errors, "; "))
+      elseif totals.recorded > 0 then
+        util.notify(string.format("found %d new completion day%s",
+          totals.recorded, totals.recorded == 1 and "" or "s"))
+      else
+        util.notify("submissions up to date")
+      end
+      cb(#errors > 0 and table.concat(errors, "; ") or nil, totals)
+    end)
   end
-  cb(nil)
+
+  if run_leetcode then
+    M.sync_leetcode(lang, function(err, result) done("LeetCode", err, result) end,
+      progress_reporter("LeetCode"))
+  end
+  if run_neetcode then
+    M.sync_neetcode(lang, function(err, result) done("NeetCode", err, result) end,
+      progress_reporter("NeetCode"))
+  end
 end
 
-function M.toggle(problem, cb)
+--- Refresh the LeetCode catalog and streak, and opportunistically pick up new
+--- accepted submissions for the configured language. Completion counts are
+--- local history and remain available offline.
+function M.sync(cb)
   cb = cb or function() end
-  if M.is_solved(problem) then
-    return M.unmark(problem, function(err) cb(err, err and nil or false) end)
+  load_cache()
+  leetcode_catalog.sync(function(err)
+    emit()
+    cb(err)
+  end)
+
+  if not state.checking then
+    state.checking = true
+    M.check_new(config.options.lang, function()
+      state.checking = false
+      emit()
+    end)
   end
-  M.mark(problem, function(err) cb(err, err and nil or true) end)
 end
 
 function M.load()
