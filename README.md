@@ -1,4 +1,4 @@
-# eetCode.nvim
+# meatcode.nvim
 
 A TUI for the [NeetCode](https://neetcode.io) roadmap and the full
 [LeetCode](https://leetcode.com/problemset/) catalog. Search every LeetCode
@@ -27,8 +27,8 @@ diffs them, entirely on your machine — no rate limits, instant feedback.
 
 ```lua
 {
-  "samits/eetCode.nvim",
-  cmd = "EetCode",
+  "urwrstkn8mare/meatcode.nvim",
+  cmd = "MeatCode",
   dependencies = {
     "nvim-telescope/telescope.nvim", -- Full-page LeetCode finder.
     -- Optional: draws problem diagrams inline.
@@ -47,9 +47,9 @@ diffs them, entirely on your machine — no rate limits, instant feedback.
 
 ```lua
 use {
-  "samits/eetCode.nvim",
+  "urwrstkn8mare/meatcode.nvim",
   requires = { "nvim-telescope/telescope.nvim" },
-  config = function() require("eetcode").setup({}) end,
+  config = function() require("meatcode").setup({}) end,
 }
 ```
 
@@ -64,29 +64,29 @@ Requires Neovim 0.10+, `curl`, and
 Browsing and opening free problems works signed out. Submission requires an
 account with the selected provider.
 
-- `:EetCode login leetcode` explains how to copy the complete Cookie request
+- `:MeatCode login leetcode` explains how to copy the complete Cookie request
   header from a signed-in `leetcode.com` browser tab. The cookie must include
   `LEETCODE_SESSION` and `csrftoken`.
-- `:EetCode login neetcode` explains how to copy NeetCode's Firebase refresh
+- `:MeatCode login neetcode` explains how to copy NeetCode's Firebase refresh
   token from browser storage.
 
 Credentials are stored with `0600` permissions under
-`stdpath("cache")/eetcode`. They are sent only to their respective service.
-Use `:EetCode logout leetcode` or `:EetCode logout neetcode` to remove one.
+`stdpath("cache")/meatcode`. They are sent only to their respective service.
+Use `:MeatCode logout leetcode` or `:MeatCode logout neetcode` to remove one.
 
 ## Usage
 
 | Command | What it does |
 | --- | --- |
-| `:EetCode` | Open the current NeetCode roadmap |
-| `:EetCode roadmap [name]` | Open a roadmap; optionally select `blind75`, `neetcode150`, `neetcode250`, or `allNC` |
-| `:EetCode list [query]` | Fuzzy-search every LeetCode problem |
-| `:EetCode random` | Open a random accessible problem with no completions in the selected language |
-| `:EetCode daily` | Open LeetCode's problem of the day |
-| `:EetCode lang [name]` | Show or change the solution language |
-| `:EetCode status` | Show both provider states |
-| `:EetCode login [provider]` | Log in to `leetcode` or `neetcode` |
-| `:EetCode logout [provider]` | Remove one provider's credentials |
+| `:MeatCode` | Open the current NeetCode roadmap |
+| `:MeatCode roadmap [name]` | Open a roadmap; optionally select `blind75`, `neetcode150`, `neetcode250`, or `allNC` |
+| `:MeatCode list [query]` | Fuzzy-search every LeetCode problem |
+| `:MeatCode random` | Open a random accessible problem with no completions in the selected language |
+| `:MeatCode daily` | Open LeetCode's problem of the day |
+| `:MeatCode lang [name]` | Show or change the solution language |
+| `:MeatCode status` | Show both provider states |
+| `:MeatCode login [provider]` | Log in to `leetcode` or `neetcode` |
+| `:MeatCode logout [provider]` | Remove one provider's credentials |
 
 Problem actions are buffer-local mappings rather than duplicate commands; see
 [Solving](#solving). `L` / `H` on the roadmap also cycle its curated list.
@@ -153,7 +153,7 @@ tab: description on the left, your solution file on the right, results
 underneath. The solution is a **real file on disk**, so your LSP, treesitter,
 formatters and keymaps all work normally.
 
-Solutions live at `stdpath("data")/eetcode/solutions/<topic>/<problem>.<ext>`.
+Solutions live at `stdpath("data")/meatcode/solutions/<topic>/<problem>.<ext>`.
 
 | Key | Action |
 | --- | --- |
@@ -201,7 +201,7 @@ rather than silently accepted.
 ```text
 solutions/
 ├── .clangd                 # one fragment per problem, PathMatch-scoped
-└── .eetcode/
+└── .meatcode/
     ├── prelude.h           # standard library + using namespace std
     ├── clone-graph.h       # class Node { vector<Node*> neighbors; ... }
     └── meeting-schedule.h  # class Interval { int start, end; ... }
@@ -282,11 +282,11 @@ identified when the harness had started it.
 ## Configuration
 
 ```lua
-require("eetcode").setup({
+require("meatcode").setup({
   list = "neetcode150",
   lang = "python",
-  solutions_dir = vim.fn.stdpath("data") .. "/eetcode/solutions",
-  cache_dir = vim.fn.stdpath("cache") .. "/eetcode",
+  solutions_dir = vim.fn.stdpath("data") .. "/meatcode/solutions",
+  cache_dir = vim.fn.stdpath("cache") .. "/meatcode",
   catalog_max_age = 24 * 60 * 60,   -- background refresh age; false disables refresh
   timeout = 30,
   runner = {
@@ -325,5 +325,5 @@ See [`doc/api.md`](doc/api.md) for the full reverse-engineered API map.
 ## Caveats
 
 LeetCode and NeetCode APIs used here are undocumented and can change without
-notice. eetCode.nvim is not affiliated with or endorsed by either service.
+notice. meatcode.nvim is not affiliated with or endorsed by either service.
 Submissions execute on third-party infrastructure; use them responsibly.
