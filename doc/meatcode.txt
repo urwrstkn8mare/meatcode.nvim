@@ -24,7 +24,7 @@ outputs diffed, so no network round trip is needed to know whether you are
 right on the visible cases.
 
 Requires Neovim 0.10+, `curl`, and telescope.nvim. Local runs need `python3`
-and/or a C++17 compiler.
+and/or a C++ compiler.
 
 ==============================================================================
 2. SETUP                                                   *meatcode-setup*
@@ -169,7 +169,7 @@ Defaults: >lua
       runner = {
         python = { cmd = { "python3" } },
         cpp = {
-          cmd = { "c++", "-std=c++23", "-O2", "-o", "{out}", "{source}" },
+          cmd = { "c++", "-std=c++23", "-g", "-O0", "-o", "{out}", "{source}" },
           clangd = true,
         },
         time_limit = 10,
@@ -185,6 +185,7 @@ Defaults: >lua
         roadmap = { open = "<CR>", quit = "q", cycle_list = "L" },
         problem = {
           run = "<leader>nr", submit = "<leader>ns",
+          tests = "<leader>nt", test_failed = "<leader>na",
           reset = "<leader>nR",
           open_leetcode = "<leader>nol", open_neetcode = "<leader>non",
           quit = "q",

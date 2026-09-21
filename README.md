@@ -1,25 +1,27 @@
 # meatcode.nvim
 
-A TUI for the [NeetCode](https://neetcode.io) roadmap and the full
-[LeetCode](https://leetcode.com/problemset/) catalog. Search every LeetCode
-problem, pick a random problem or the daily challenge, solve in a real buffer,
-run matching NeetCode cases locally, and submit through LeetCode by default.
+(L/N)eetCode without leaving Neovim. Browse problems via NeetCode's roadmap or a
+fuzzy-searchable list of all LeetCode problems. Work on it locally, run/debug
+test cases locally, and submit to LeetCode (sometimes NeetCode if LeetCode
+submission locked).
 
-![NeetCode Roadmap](assets/screenshot.png)
+![NeetCode Roadmap](doc/screenshot.png)
 
-This repo is the result of some careful LLM prompting. I am still happy to
-respond to issues and PRs and understand the codebase enough to maintain it
-until I no longer use it.
+Currently only C++/Python supported, feel free to submit a PR to add more
+languages.
 
-## Why local runs are possible
+Fair warning: this repo is mostly the result of some careful LLM prompting. I
+still read every issue and PR and know the codebase well enough to maintain it
+for as long as I use it.
 
-NeetCode keeps expected outputs server-side — the API hands you test case
-*inputs* and a hidden suite count, never the answers. But it does expose its own
-**reference solution** for every problem, unauthenticated.
+## Requirements
 
-So `run` executes your code *and* the reference solution over the same inputs and
-diffs them, entirely on your machine — no rate limits, instant feedback.
-`submit` uses the selected provider's cloud judge for the hidden suite.
+- Neovim 0.10+ and `curl`
+- [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim) for the
+  LeetCode problem list
+- `python3` and/or a C++ compiler, if you want local test runs
+- optional: [image.nvim](https://github.com/3rd/image.nvim) to draw problem
+  diagrams inline
 
 ## Install
 
@@ -30,13 +32,12 @@ diffs them, entirely on your machine — no rate limits, instant feedback.
   "urwrstkn8mare/meatcode.nvim",
   cmd = "MeatCode",
   dependencies = {
-    "nvim-telescope/telescope.nvim", -- Full-page LeetCode finder.
-    -- Optional: draws problem diagrams inline.
-    "3rd/image.nvim",
+    "nvim-telescope/telescope.nvim",
+    "3rd/image.nvim", -- optional
   },
   opts = {
-    lang = "python",       -- or "cpp"
-    list = "neetcode150",  -- blind75 | neetcode150 | neetcode250 | allNC
+    lang = "python",      -- or "cpp"
+    list = "neetcode150", -- blind75 | neetcode150 | neetcode250 | allNC
   },
 }
 ```
@@ -55,275 +56,109 @@ use {
 
 </details>
 
-Requires Neovim 0.10+, `curl`, and
-[Telescope](https://github.com/nvim-telescope/telescope.nvim). Local runs need
-`python3` and/or a C++ compiler.
+Every option is listed in [doc/configuration.md](doc/configuration.md).
 
 ## Log in
 
-Browsing and opening free problems works signed out. Submission requires an
-account with the selected provider.
+Browsing and opening free problems works signed out. Submitting needs an
+account with whichever provider you submit to.
 
-- `:MeatCode login leetcode` explains how to copy the complete Cookie request
-  header from a signed-in `leetcode.com` browser tab. The cookie must include
-  `LEETCODE_SESSION` and `csrftoken`.
-- `:MeatCode login neetcode` explains how to copy NeetCode's Firebase refresh
-  token from browser storage.
+| Command | What you hand over |
+| --- | --- |
+| `:MeatCode login leetcode` | the full `Cookie` request header from a signed-in `leetcode.com` tab (it must contain `LEETCODE_SESSION` and `csrftoken`) |
+| `:MeatCode login neetcode` | NeetCode's Firebase refresh token, out of browser storage |
 
-Credentials are stored with `0600` permissions under
-`stdpath("cache")/meatcode`. They are sent only to their respective service.
-Use `:MeatCode logout leetcode` or `:MeatCode logout neetcode` to remove one.
+Both commands walk you through getting the value. Credentials are written with
+`0600` permissions under `stdpath("cache")/meatcode` and are only ever sent to
+the service they belong to. `:MeatCode logout leetcode` / `:MeatCode logout
+neetcode` deletes one, `:MeatCode status` shows where you stand.
 
 ## Usage
 
 | Command | What it does |
 | --- | --- |
-| `:MeatCode` | Open the current NeetCode roadmap |
-| `:MeatCode roadmap [name]` | Open a roadmap; optionally select `blind75`, `neetcode150`, `neetcode250`, or `allNC` |
+| `:MeatCode` | Open the roadmap |
+| `:MeatCode roadmap [name]` | Open the roadmap on `blind75`, `neetcode150`, `neetcode250`, or `allNC` |
 | `:MeatCode list [query]` | Fuzzy-search every LeetCode problem |
-| `:MeatCode random` | Open a random accessible problem with no completions in the selected language |
+| `:MeatCode random` | Open a random accessible problem you have not completed in the current language |
 | `:MeatCode daily` | Open LeetCode's problem of the day |
 | `:MeatCode lang [name]` | Show or change the solution language |
 | `:MeatCode status` | Show both provider states |
-| `:MeatCode login [provider]` | Log in to `leetcode` or `neetcode` |
-| `:MeatCode logout [provider]` | Remove one provider's credentials |
+| `:MeatCode login`/`logout [provider]` | See above |
 
-Problem actions are buffer-local mappings rather than duplicate commands; see
-[Solving](#solving). `L` / `H` on the roadmap also cycle its curated list.
+Anything you do to a problem is a buffer-local mapping rather than another Ex
+command.
 
-Completion counts are recorded from accepted cloud submissions in the selected
-language. LeetCode and NeetCode accepts share one local history, and repeated
-accepts for a problem on the same calendar day count once — regardless of how
-many submissions landed that day or which provider they came from. Opening the
-roadmap or LeetCode finder refreshes stale catalogs and the streak in the
-background; completion history remains available offline.
+**Roadmap** — `hjkl` or arrows to move, `<CR>` to open a topic, `L`/`H` to
+cycle curated lists, `?` for help, `q` to close. The terminal cursor is hidden
+while the roadmap has focus since the highlighted node already shows where you
+are (`ui.hide_cursor = false` keeps it).
 
-Checking completion history for a language walks each provider's full
-submission history the first time: LeetCode's account submission log, and
-NeetCode's daily activity log (the same data behind its streak calendar). This
-happens automatically the first time the roadmap or LeetCode finder opens for
-that language. After that, each further open opportunistically looks for
-submissions made *outside* this plugin since the last check — a stored cursor
-(last-seen LeetCode submission id, last-checked NeetCode day) lets it fetch
-just what's new instead of re-walking history, so it stays cheap on every
-launch. Each check notifies when it starts and again with a summary when it
-finishes (a long first-time walk also reports progress along the way), so a
-quiet "submissions up to date" confirms nothing was missed. A provider you
-aren't logged into is skipped without a notification. LeetCode's day boundary
-is your local timezone and NeetCode's is UTC, so a submission near midnight
-can occasionally land in the count for the adjacent day on one provider.
+**Problem list** — `<CR>` opens, `o` opens it on LeetCode, `v` plays the
+NeetCode video, `q` closes. The number beside a problem is how many days you
+have completed it in the current language.
 
-### Roadmap
+**LeetCode finder** — a full-page Telescope picker with the problem count and
+your current streak. Type to filter by number, title, slug, or difficulty;
+`<CR>` opens, `<C-o>` opens it in a browser.
+
+**Solving** — the problem opens in its own tab: statement on the left, your
+solution on the right, results underneath.
 
 | Key | Action |
 | --- | --- |
-| `h` `j` `k` `l` / arrows | Move between topics |
-| `<CR>` | Open the topic's problem list |
-| `L` / `H` | Next / previous curated list |
-| `?` | Help |
-| `q` | Close |
-
-The terminal cursor is hidden while the roadmap has focus, since the selected
-node already shows where you are. Set `ui.hide_cursor = false` to keep it.
-
-### LeetCode finder
-
-The full-page Telescope finder shows the problem count, current streak, and the
-`random` and `daily` commands. Type to fuzzy-filter by problem number, title,
-slug, or difficulty; `<CR>` opens the selected problem and `<C-o>` opens it in
-a browser.
-
-### Problem list
-
-| Key | Action |
-| --- | --- |
-| `<CR>` | Open the problem |
-| `0`, `1`, … | Completion days for the selected language |
-| `o` | Open on LeetCode |
-| `v` | Open the NeetCode video |
-| `q` | Close |
-
-### Solving
-
-Problems opened from the roadmap, full list, random command, or daily command
-use LeetCode statements, starter code, and submissions by default. If a problem
-is LeetCode Premium and the signed-in user is not Premium, the matching
-NeetCode problem is used instead when available. The problem opens in a new
-tab: description on the left, your solution file on the right, results
-underneath. The solution is a **real file on disk**, so your LSP, treesitter,
-formatters and keymaps all work normally.
-
-Solutions live at `stdpath("data")/meatcode/solutions/<topic>/<problem>.<ext>`.
-
-| Key | Action |
-| --- | --- |
-| `<leader>nr` | Run the visible test cases locally when available |
-| `<leader>ns` | Submit to LeetCode by default, or the active fallback provider |
-| `<leader>nR` | Reset the solution to its provider's starter code |
-| `<leader>nol` / `<leader>non` | Switch the open problem's provider |
-| `<CR>` / `<Tab>` | In the statement: open the hint or diagram under the cursor |
+| `<leader>nr` | Run the visible test cases locally |
+| `<leader>ns` | Submit |
+| `<leader>nt` | Edit the local test cases |
+| `<leader>na` | Add the last failed submission input as a local case |
+| `<leader>nR` | Reset the solution to the starter code |
+| `<leader>nol` / `<leader>non` | Open the problem using LeetCode / NeetCode |
+| `<CR>` or `<Tab>` | In the statement: open the hint, link, or diagram under the cursor |
 | `q` | Close the problem |
 
-### Diagrams
+## How it works
 
-About a third of problems carry a diagram. With [`image.nvim`](https://github.com/3rd/image.nvim)
-installed and a terminal that speaks the kitty graphics protocol (kitty,
-Ghostty, WezTerm) they are drawn inline, with nothing but the diagram itself.
-Without it, nothing breaks: a `🖼 open diagram` line takes its place, which
-`<CR>` opens in your normal viewer. Disable with `ui.images = false`.
+**Two providers, one problem.** Statements, starter code and submissions come
+from LeetCode by default. If a problem is Premium and you are not, the matching
+NeetCode problem is used instead where one exists. `<leader>nol` / `<leader>non`
+switch an open problem by hand.
 
-`<CR>` follows links the same way. Links in the prose show as an underlined
-label with the URL hidden, and the footer carries the problem on NeetCode, on
-LeetCode, and its video. Where a line holds more than one link, the column under
-the cursor picks which.
+**Your solution is a real file on disk**, at
+`stdpath("data")/meatcode/solutions/<topic>/<problem>.<ext>`, so your LSP,
+treesitter, formatter and keymaps all behave normally. For C++ the plugin also
+writes a `.clangd` so the language server stops flagging valid solutions; see
+[doc/cpp.md](doc/cpp.md).
 
-### C++ and your language server
+**Local runs need no network and no rate limit.** Expected outputs are kept
+server-side, but NeetCode exposes its own *reference solution* for every
+problem. So `<leader>nr` runs your code and the reference over the same inputs
+and diffs them, on your machine. `<leader>ns` still goes to the cloud judge for
+the hidden suite. Python and C++, function and design problems: 148/150 of the
+NeetCode 150 run locally in Python, 146/150 in C++. What's covered and what
+isn't, plus editing the case list, is in
+[doc/local-runs.md](doc/local-runs.md).
 
-NeetCode's starter code has no `#include`s, no `using namespace std;`, and no
-definition of `ListNode` / `TreeNode` / `Node` / `Interval` — its judge supplies
-all of them. A language server does not, so valid solutions light up red.
+**Completions come from your actual submission history**, not a local
+checkbox. Accepted cloud submissions in the current language count once per
+problem per day, and LeetCode and NeetCode share one history, so submissions
+you made outside this plugin still count. Details in
+[doc/progress.md](doc/progress.md).
 
-So the plugin generates a `.clangd` beside your solutions (`runner.cpp.clangd`).
-Compile flags — including `-std` — are taken from `runner.cpp.cmd`, so clangd
-parses with the same language mode the local runner compiles with. Your
-solution file is left exactly as NeetCode wrote it — nothing is inserted into
-it, and nothing extra is submitted.
+**The catalog keeps itself current.** Nothing is bundled with the plugin; it is
+fetched on first use and refreshed in the background at most once a day. The UI
+never blocks on it, and completion history stays readable offline.
 
-The generated config force-includes a shared `prelude.h` holding the standard
-library and `using namespace std;`, plus a **per-problem header holding that
-problem's own helper types**, lifted from the definition NeetCode leaves in its
-starter comment. This matters
-because there is no single right answer: `Node` is an adjacency list in Clone
-Graph and a random pointer in Copy List with Random Pointer. Each problem gets
-the one it actually has, so `node->random` is correctly rejected in Clone Graph
-rather than silently accepted.
+## Docs
 
-```text
-solutions/
-├── .clangd                 # one fragment per problem, PathMatch-scoped
-└── .meatcode/
-    ├── prelude.h           # standard library + using namespace std
-    ├── clone-graph.h       # class Node { vector<Node*> neighbors; ... }
-    └── meeting-schedule.h  # class Interval { int start, end; ... }
-```
-
-Headers are written when you open a problem and `.clangd` is rebuilt from
-whatever exists on disk, so it stays consistent. An existing `.clangd` the
-plugin did not write is left alone only if it already matches `runner.cpp.cmd`
-(same `-std` / `-stdlib`); a stale or conflicting one is overwritten. Measured
-over seeded solutions, `clangd --check` goes from 1–4 errors per file to zero.
-
-**Edit test cases.** Press `<leader>nt` to edit the local suite. Add cases
-separated by a line containing `---`, or delete a whole case to remove it. Use
-`:w` to save and `:q` to close. Local runs also save pending edits.
-`<leader>na` adds and saves the latest failed submission input, skipping
-duplicates. These cases only affect local runs.
-
-The edited suite is stored in `<solution-file>.cases`. Initially it includes the
-visible cases and any legacy `.tests` extras; once saved, it replaces that combined
-suite. An empty `.cases` file runs no cases. Delete it to restore the default suite.
-
-**Legacy extra test cases.** Create `<solution-file>.tests` next to your solution and
-separate cases with a line containing `---`:
-
-```text
-nums=[1,2,3,4]
-target=7
----
-nums=[0,0]
-target=0
-```
-
-## Local runs: what's supported
-
-Local execution covers **Python** and **C++**, for both `function` problems and
-the `class` ("design") problems. Handled:
-
-- integers, floats, booleans, `char`, strings, and nested `vector`/`list` of those
-- `ListNode` and `TreeNode`, array-encoded exactly as LeetCode does — including
-  `List[ListNode]` (merge-k-sorted-lists) and scalars that identify an existing
-  node inside another argument (`lowestCommonAncestor`'s `p` and `q`)
-- helper classes such as `Interval`, recovered from the docstring the reference
-  solution carries
-- in-place problems that mutate their first argument and return nothing
-- 32-bit values passed as zero-padded binary strings (`reverse-bits`)
-- reference solutions whose parameter names differ from the test-case keys —
-  arguments are bound positionally
-- design problems (Min Stack, LRU Cache, Trie, Design Twitter, ...): the call
-  sequence is replayed against both your class and the reference class, and the
-  two return-value lists are diffed. Both encodings NeetCode uses are decoded —
-  LeetCode's two-line `names` / `args` pair, and NeetCode's interleaved
-  `["MinStack", "push", 1, ...]` form, whose argument boundaries are recovered
-  from the arities in the starter code
-- encode/decode pairs (Serialize/Deserialize Binary Tree, Encode and Decode
-  Strings), judged by round-tripping the input through both halves
-- test cases that quote their numbers (`"1"` rather than `1`), coerced to the
-  parameter's declared type
-
-Not run locally: SQL, and problems that encode arguments **by reference** rather
-than by value — an adjacency list in `clone-graph`, the random pointers in
-`copy-linked-list-with-random-pointer`. Those cannot be faithfully rebuilt, so
-the plugin says so plainly rather than reporting a bogus diff, and points you at
-`submit`, which always works. C++ additionally cannot take `vector<Interval>`
-(`meeting-schedule`), which Python handles.
-
-Across the NeetCode 150 that is 148/150 runnable locally in Python and 146/150
-in C++.
-
-When your output matches the reference only up to ordering, the case is reported
-as passing with a note; the real judge makes the final call.
-
-Hard C++ crashes retain their signal number and include a diagnosis when known —
-for example, `SIGSEGV` for invalid memory access and `SIGBUS` for invalid or
-misaligned memory access. When LLDB is installed, the harness reruns only after
-a crash and appends its source backtrace. The failing visible test case is
-identified when the harness had started it.
-
-## Configuration
-
-```lua
-require("meatcode").setup({
-  list = "neetcode150",
-  lang = "python",
-  solutions_dir = vim.fn.stdpath("data") .. "/meatcode/solutions",
-  cache_dir = vim.fn.stdpath("cache") .. "/meatcode",
-  catalog_max_age = 24 * 60 * 60,   -- background refresh age; false disables refresh
-  timeout = 30,
-  runner = {
-    python = { cmd = { "python3" } },
-    cpp = { cmd = { "c++", "-std=c++23", "-g", "-O0", "-o", "{out}", "{source}" } },
-    time_limit = 10,
-  },
-  ui = { node_width = 24, border = "rounded" },
-  keys = {
-    roadmap = { open = "<CR>", quit = "q", cycle_list = "L" },
-    problem = {
-      run = "<leader>nr", submit = "<leader>ns",
-      reset = "<leader>nR",
-      open_leetcode = "<leader>nol", open_neetcode = "<leader>non", quit = "q",
-    },
-  },
-})
-```
-
-## How the catalog stays current
-
-The roadmap grouping and curated-list membership are not in any API — they live
-in a static array inside the site's JS bundle. The plugin scrapes that bundle,
-anchoring on a stable data string and walking outward, so it survives the
-re-minification that happens on every NeetCode deploy. Results are validated
-(exactly 75/150/250, expected patterns present) before replacing the cache.
-
-Nothing is bundled with the plugin: the catalog is fetched on first use and
-refreshed in the background at most once a day. The UI never blocks on it — a
-cached catalog renders immediately and is swapped out when newer data lands. A
-first run needs network; it takes well under a second, and the roadmap says what
-it is waiting for.
-
-See [`doc/api.md`](doc/api.md) for the full reverse-engineered API map.
+- [Configuration](doc/configuration.md) — every option, plus highlight groups
+- [Local test runs](doc/local-runs.md) — coverage, editing cases, crash output
+- [C++ and clangd](doc/cpp.md) — why a `.clangd` is generated and what's in it
+- [Progress tracking](doc/progress.md) — how completions and streaks are counted
+- [NeetCode's API](doc/api/neetcode.md) and [LeetCode's API](doc/api/leetcode.md) — what was reverse-engineered, and how it holds up
+- `:help meatcode` — the same ground in Vim help form
 
 ## Caveats
 
-LeetCode and NeetCode APIs used here are undocumented and can change without
-notice. meatcode.nvim is not affiliated with or endorsed by either service.
-Submissions execute on third-party infrastructure; use them responsibly.
+Both APIs used here are undocumented and can change without notice.
+meatcode.nvim is not affiliated with or endorsed by NeetCode or LeetCode.
+Submissions run on their infrastructure; be reasonable with them.

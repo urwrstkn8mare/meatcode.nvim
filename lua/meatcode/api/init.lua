@@ -4,7 +4,7 @@ local client = require("meatcode.api.client")
 --- Typed wrappers over the NeetCode backend.
 ---
 --- Endpoint names and payload shapes were recovered from the site's JS bundle;
---- see doc/api.md for the full map.
+--- see doc/api/neetcode.md for the full map.
 local M = {}
 
 
