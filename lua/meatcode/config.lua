@@ -62,8 +62,14 @@ local defaults = {
 			tests = "<leader>nt",
 			test_failed = "<leader>na",
 			reset = "<leader>nR",
+			-- Open the problem statement in the browser.
 			open_leetcode = "<leader>nol",
 			open_neetcode = "<leader>non",
+			-- Open the problem's NeetCode video in the browser.
+			open_video = "<leader>nov",
+			-- Switch the local description/test cases between the LeetCode and
+			-- NeetCode versions of the problem.
+			switch_provider = "<leader>nd",
 			quit = "q",
 		},
 	},

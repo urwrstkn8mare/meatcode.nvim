@@ -112,7 +112,9 @@ solution on the right, results underneath.
 | `<leader>nt` | Edit the local test cases |
 | `<leader>na` | Add the last failed submission input as a local case |
 | `<leader>nR` | Reset the solution to the starter code |
-| `<leader>nol` / `<leader>non` | Open the problem using LeetCode / NeetCode |
+| `<leader>nol` / `<leader>non` | Open the problem on LeetCode / NeetCode in the browser |
+| `<leader>nov` | Open the problem's NeetCode video in the browser |
+| `<leader>nd` | Switch the local description/test cases between LeetCode and NeetCode |
 | `<CR>` or `<Tab>` | In the statement: open the hint, link, or diagram under the cursor |
 | `q` | Close the problem |
 
@@ -120,8 +122,10 @@ solution on the right, results underneath.
 
 **Two providers, one problem.** Statements, starter code and submissions come
 from LeetCode by default. If a problem is Premium and you are not, the matching
-NeetCode problem is used instead where one exists. `<leader>nol` / `<leader>non`
-switch an open problem by hand.
+NeetCode problem is used instead where one exists. `<leader>nd` switches an
+open problem's local description/test cases by hand; `<leader>nol` /
+`<leader>non` / `<leader>nov` open the problem (or its NeetCode video) in the
+browser without touching what's loaded locally.
 
 **Your solution is a real file on disk**, at
 `stdpath("data")/meatcode/solutions/<topic>/<problem>.<ext>`, so your LSP,

@@ -105,8 +105,11 @@ Solving ~
   <leader>nr            Run visible cases locally when available
   <leader>ns            Submit through the active provider
   <leader>nR            Reset to the selected provider's starter code
-  <leader>nol           Reopen using LeetCode
-  <leader>non           Reopen using NeetCode
+  <leader>nol           Open the problem on LeetCode in the browser
+  <leader>non           Open the problem on NeetCode in the browser
+  <leader>nov           Open the problem's NeetCode video in the browser
+  <leader>nd            Switch the local description/test cases between
+                        LeetCode and NeetCode
   <CR> or <Tab>         Statement window: toggle the hint under the cursor, or
                         follow the link under it via |vim.ui.open()|.
   q                     Close the problem (statement/results windows)
@@ -188,6 +191,7 @@ Defaults: >lua
           tests = "<leader>nt", test_failed = "<leader>na",
           reset = "<leader>nR",
           open_leetcode = "<leader>nol", open_neetcode = "<leader>non",
+          open_video = "<leader>nov", switch_provider = "<leader>nd",
           quit = "q",
         },
       },

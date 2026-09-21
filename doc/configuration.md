@@ -64,6 +64,8 @@ require("meatcode").setup({
       reset = "<leader>nR",
       open_leetcode = "<leader>nol",
       open_neetcode = "<leader>non",
+      open_video = "<leader>nov",
+      switch_provider = "<leader>nd",
       quit = "q",
     },
   },

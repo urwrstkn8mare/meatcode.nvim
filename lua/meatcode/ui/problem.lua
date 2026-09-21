@@ -636,15 +636,58 @@ local function activate(s)
   pcall(vim.api.nvim_win_set_cursor, s.desc_win, { row + 1, 0 })
 end
 
+--- Switch the local description/test cases to another provider's version of
+--- the problem, re-fetching and reseeding the buffer.
 function M.switch(provider)
   local s = ready()
   if not s then return end
   if provider == "neetcode" and not s.problem.id then
     return util.err("this problem does not exist on NeetCode")
   end
+  if provider == "leetcode" and not s.problem.leetcode then
+    return util.err("this problem does not exist on LeetCode")
+  end
   local problem, lang = s.problem, s.lang
   M.close(s)
   vim.schedule(function() M.open(problem, { provider = provider, lang = lang }) end)
+end
+
+--- Toggle the open problem between the LeetCode and NeetCode local
+--- description/test cases.
+function M.toggle_provider()
+  local s = ready()
+  if not s then return end
+  M.switch(s.provider == "leetcode" and "neetcode" or "leetcode")
+end
+
+--- Open the LeetCode page for this problem in the browser.
+function M.open_leetcode_browser()
+  local s = ready()
+  if not s then return end
+  if not s.problem.leetcode then
+    return util.err("this problem does not exist on LeetCode")
+  end
+  vim.ui.open("https://leetcode.com/problems/" .. s.problem.leetcode .. "/")
+end
+
+--- Open the NeetCode page for this problem in the browser.
+function M.open_neetcode_browser()
+  local s = ready()
+  if not s then return end
+  if not s.problem.id then
+    return util.err("this problem does not exist on NeetCode")
+  end
+  vim.ui.open("https://neetcode.io/problems/" .. s.problem.id)
+end
+
+--- Open this problem's NeetCode video in the browser.
+function M.open_video()
+  local s = ready()
+  if not s then return end
+  if not s.problem.video then
+    return util.err("this problem has no NeetCode video")
+  end
+  vim.ui.open("https://youtube.com/watch?v=" .. s.problem.video)
 end
 
 local function keymaps(s)
@@ -658,8 +701,10 @@ local function keymaps(s)
     map(keys.tests, M.tests, "MeatCode: edit test cases")
     map(keys.test_failed, M.test_failed, "MeatCode: add failed submission case")
     map(keys.reset, M.reset, "MeatCode: reset to starter code")
-    map(keys.open_leetcode, function() M.switch("leetcode") end, "MeatCode: use LeetCode")
-    map(keys.open_neetcode, function() M.switch("neetcode") end, "MeatCode: use NeetCode")
+    map(keys.open_leetcode, M.open_leetcode_browser, "MeatCode: open on LeetCode")
+    map(keys.open_neetcode, M.open_neetcode_browser, "MeatCode: open on NeetCode")
+    map(keys.open_video, M.open_video, "MeatCode: open NeetCode video")
+    map(keys.switch_provider, M.toggle_provider, "MeatCode: switch LeetCode/NeetCode description")
     -- A problem tab is one unit: closing a split closes the tab.
     map("<C-w>c", function() M.close(s) end, "MeatCode: close problem")
     map("<C-w>q", function() M.close(s) end, "MeatCode: close problem")
