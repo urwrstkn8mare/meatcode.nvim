@@ -141,15 +141,7 @@ local function open_picker(query)
       local function open_browser()
         local selected = action_state.get_selected_entry()
         if not selected then return end
-        local links = providers.links(selected.value)
-        if #links == 0 then return end
-        if #links == 1 then return vim.ui.open(links[1].url) end
-        vim.ui.select(links, {
-          prompt = "Open link:",
-          format_item = function(link) return link.label end,
-        }, function(choice)
-          if choice then vim.ui.open(choice.url) end
-        end)
+        require("meatcode.ui.links").open(selected.value)
       end
       map("i", "<C-o>", open_browser)
       map("n", "o", open_browser)

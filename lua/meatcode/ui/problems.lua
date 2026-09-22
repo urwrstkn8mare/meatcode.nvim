@@ -102,15 +102,8 @@ local function keymaps()
 
   map("o", function()
     local p = current()
-    local links = p and providers.links(p) or {}
-    if #links == 0 then return util.notify("no links for this problem") end
-    if #links == 1 then return vim.ui.open(links[1].url) end
-    vim.ui.select(links, {
-      prompt = "Open link:",
-      format_item = function(link) return link.label end,
-    }, function(choice)
-      if choice then vim.ui.open(choice.url) end
-    end)
+    if not p then return end
+    require("meatcode.ui.links").open(p)
   end, "open a problem link")
 end
 

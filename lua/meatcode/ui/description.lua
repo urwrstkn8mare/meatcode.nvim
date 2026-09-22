@@ -1,18 +1,17 @@
---- Renders a NeetCode problem statement the way the website presents it.
+--- Renders a problem statement the way the website presents it.
 ---
 --- The payload is markdown with HTML mixed in: `<details class="hint-accordion">`
 --- blocks for topics/hints, `<code>` spans, `<br>` spacing, and LaTeX between
 --- dollar signs. We fold the accordions, conceal the markup and translate the
---- maths into the characters a terminal can actually draw.
-local providers = require("meatcode.providers")
-
+--- maths into the characters a terminal can actually draw. Provider links live
+--- in the <leader>no fuzzy picker, not here.
 local M = {}
 
 local NS = vim.api.nvim_create_namespace("meatcode_description")
 
 --- State for the render in progress. `images` maps a row to a diagram to draw.
---- `links` maps a row to the openable spans on it -- inline links, diagrams and
---- footer links alike -- because a line can carry more than one.
+--- `links` maps a row to the openable spans on it -- inline links and diagrams
+--- alike -- because a line can carry more than one.
 local images, links = {}, {}
 
 ---@param from integer byte column, inclusive
@@ -367,6 +366,19 @@ function M.render(buf, problem, meta, sections, opts)
     { end_col = #badge + #sep + #status + #tail, hl_group = "MeatCodeMuted" } })
   table.insert(lines, "")
 
+  -- Provider-independent tags: the merged catalog plus whatever the fetched
+  -- metadata added, so topics/companies survive a provider switch.
+  local tags = {}
+  for _, name in ipairs(problem.topics or {}) do
+    table.insert(tags, { name = name })
+  end
+  for _, name in ipairs(problem.companies or {}) do
+    table.insert(tags, { name = name })
+  end
+  if #tags > 0 then
+    render_tags(tags, lines, marks)
+    table.insert(lines, "")
+  end
   for _, section in ipairs(sections) do
     if section.kind == "md" then
       render_md(section.text, lines, marks)
@@ -389,20 +401,7 @@ function M.render(buf, problem, meta, sections, opts)
     end
   end
 
-  -- Footer: where this problem lives, openable with the same key as a diagram.
-  local footer = {}
-  for _, link in ipairs(providers.links(problem)) do
-    table.insert(footer, { link.label:lower(), link.url })
-  end
-  if #footer > 0 then
-    table.insert(lines, "")
-    for _, entry in ipairs(footer) do
-      local label = string.format("%s%-10s %s", INDENT, entry[1], entry[2])
-      table.insert(lines, label)
-      table.insert(marks, { #lines - 1, 0, { end_col = #label, hl_group = "MeatCodeMuted" } })
-      add_link(#lines - 1, 0, #label + 1, entry[2])
-    end
-  end
+  -- No provider footer: <leader>no fuzzy-picks links instead.
 
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
