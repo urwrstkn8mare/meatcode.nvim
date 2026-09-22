@@ -148,10 +148,11 @@ oracle validation and any first-time computation of an oracle's output for a
 test case run isolated from the network, the home directory/repository and the
 rest of the host filesystem, with only the per-run scratch directory writable.
 Those outputs are cached per problem, language and exact input under
-`stdpath("cache")/meatcode/oracle-outputs/`, so a re-run only sandboxes the
-oracle again for cases you added or edited. Your own code then runs alone,
-outside the sandbox, against the cached answers. Status messages on each local
-run say which half used a sandbox.
+`stdpath("cache")/meatcode/oracle-outputs/` during the same sandboxed pass that
+validates the oracle against known answers, so known cases are never re-run.
+A later local run only sandboxes the oracle again for cases you added or
+edited. Your own code then runs alone, outside the sandbox, against the
+cached answers.
 
 On Linux isolation means fresh user, PID, network, IPC and mount namespaces via
 bubblewrap (`bwrap`), exposing `/usr`, the dynamic loader cache and minimal

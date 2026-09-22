@@ -610,20 +610,6 @@ local function oracle_outputs_path(problem_id, lang)
     config.options.cache_dir, util.slug(tostring(problem_id)), lang)
 end
 
-local function sandbox_active(required)
-  return required and config.options.runner.sandbox ~= false
-end
-
-local function sandbox_phrase(required)
-  if sandbox_active(required) then
-    return "in sandbox"
-  end
-  if required and config.options.runner.sandbox == false then
-    return "with no sandbox (runner.sandbox=false)"
-  end
-  return "with no sandbox"
-end
-
 local function empty_oracle_cache(candidate, code_hash)
   return {
     stage = candidate.stage,
@@ -670,8 +656,9 @@ local function absorb_oracle_actuals(cache, report)
   return errors
 end
 
---- Ensure every case has an oracle output. Runs the selected provider solution
---- alone (sandboxed) for cases that are missing; leaves the rest untouched.
+--- Ensure every case has an oracle output. Validation already seeds known
+--- cases; this only sandboxes the selected provider solution for inputs that
+--- are still missing (typically cases the user just added).
 local function ensure_oracle_outputs(problem_id, lang, meta, candidate, cases, cb, status)
   local cache = load_oracle_cache(problem_id, lang, candidate)
   local missing, cached_n = {}, 0
@@ -685,19 +672,13 @@ local function ensure_oracle_outputs(problem_id, lang, meta, candidate, cases, c
   end
 
   if #missing == 0 then
-    if status then
-      status(string.format(
-        "Oracle outputs: %d cached · your code will run with no sandbox",
-        cached_n))
-    end
     return cb(nil, cache.outputs)
   end
 
   if status then
     status(string.format(
-      "Oracle: computing %d new output%s %s (%d cached)",
-      #missing, #missing == 1 and "" or "s",
-      sandbox_phrase(true), cached_n))
+      "Computing oracle outputs for %d new case%s (%d cached)",
+      #missing, #missing == 1 and "" or "s", cached_n))
   end
 
   local trial_meta = vim.deepcopy(meta)
@@ -727,11 +708,6 @@ local function ensure_oracle_outputs(problem_id, lang, meta, candidate, cases, c
       end
     end
     persist_oracle_cache(problem_id, lang, cache)
-    if status then
-      status(string.format(
-        "Oracle outputs ready (%d total) · your code will run with no sandbox",
-        cached_n + #missing))
-    end
     cb(nil, cache.outputs)
   end, "expected")
 end
@@ -800,17 +776,17 @@ local function resolve_source(problem_id, lang, meta, cases, cb, status)
     local trial_cases = #known > 0 and known or cases
     local trial_oracle = #known > 0 and "expected" or "reference"
     if status then
-      status(string.format("Validating %s %s candidate %d/%d %s · %d worker%s",
+      local workers = parallelism(#trial_cases)
+      status(string.format("Validating %s %s candidate %d/%d · %d worker%s",
         candidate.provider or "local", candidate.stage, index - 1, #candidates,
-        sandbox_phrase(true), parallelism(#trial_cases),
-        parallelism(#trial_cases) == 1 and "" or "s"))
+        workers, workers == 1 and "" or "s"))
     end
     run_selected(problem_id, candidate.code, lang,
       trial_meta, trial_cases, function(report)
         if report.ok and report.total > 0 and report.passed == report.total then
           save_selection(problem_id, lang, meta, candidate, validation_key)
-          -- Seed per-case outputs from the validation run so the next user run
-          -- does not re-execute the oracle on cases it already saw.
+          -- Same sandboxed pass that proved the candidate also seeds its
+          -- per-case outputs, so known cases are never re-executed later.
           local cache = load_oracle_cache(problem_id, lang, candidate)
           absorb_oracle_actuals(cache, report)
           persist_oracle_cache(problem_id, lang, cache)
@@ -852,20 +828,19 @@ function M.run(problem_id, code, lang, meta, cases, cb, status)
       if status then
         if candidate then
           status(string.format(
-            "Running your code %s · %s %s oracle · %d worker%s",
-            sandbox_phrase(false), candidate.provider, candidate.stage,
+            "Running with %s %s oracle · %d worker%s",
+            candidate.provider, candidate.stage,
             workers, workers == 1 and "" or "s"))
         else
           status(string.format(
-            "Running your code %s · statement/learned answers · %d worker%s",
-            sandbox_phrase(false), workers, workers == 1 and "" or "s"))
+            "Running with statement/learned answers · %d worker%s",
+            workers, workers == 1 and "" or "s"))
         end
       end
       run_selected(problem_id, code, lang, selected, cases, function(report)
         report.oracle_stage = candidate and candidate.stage or "expected"
         report.oracle_provider = candidate and candidate.provider or nil
         report.oracle_id = candidate and candidate.id or nil
-        report.sandboxed = false
         cb(report)
       end, "expected")
     end
