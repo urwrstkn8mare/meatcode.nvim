@@ -134,7 +134,7 @@ the roadmap for the full set).
 - Notes per problem, kept beside the solution file
 - A solved/attempted filter in the finder, driven by the shared history
 
-## Caveats
+## Notes and thanks
 
 All three APIs used here are undocumented and can change without notice.
 meatcode.nvim is not affiliated with or endorsed by NeetCode, LeetCode or
@@ -143,3 +143,6 @@ LintCode; submissions run on their infrastructure, so be reasonable with them.
 Fair warning: this repo is mostly the result of some careful LLM prompting. I
 still read every issue and PR and know the codebase well enough to maintain it
 for as long as I use it.
+
+Thanks to [leetcode.nvim](https://github.com/kawre/leetcode.nvim), which this
+plugin took its first cues from.
