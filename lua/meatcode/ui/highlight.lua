@@ -6,6 +6,8 @@ M.NS = vim.api.nvim_create_namespace("meatcode")
 --- so the plugin inherits the user's palette instead of hardcoding colours.
 local GROUPS = {
   MeatCodeMuted = { link = "Comment" },
+  -- Even quieter than Comment: for the Ex-command hints on the homepage.
+  MeatCodeFaint = { link = "NonText" },
   MeatCodeDone = { link = "DiagnosticOk" },
   MeatCodeTodo = { link = "Comment" },
   MeatCodeNodeDone = { link = "DiagnosticOk" },
