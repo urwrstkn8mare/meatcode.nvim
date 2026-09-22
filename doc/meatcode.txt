@@ -223,7 +223,7 @@ is overwritten.
 `ui.images` draws problem diagrams inline through image.nvim, which needs a
 terminal speaking the kitty graphics protocol; the diagram is shown on its own,
 with no caption. Without it a diagram becomes a 🖼 line that <CR> opens
-externally, as the footer links do.
+externally, as inline links do.
 
 Highlight groups are defined with `default = true` and link to standard groups,
 so a colorscheme can override any of them: `MeatCodeNodeDone`,

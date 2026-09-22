@@ -653,8 +653,8 @@ local function link_at(s, row, col)
   return nil
 end
 
---- <CR> in the statement: follow the link under the cursor -- an inline link, a
---- diagram or a footer link -- or toggle the hint accordion under it.
+--- <CR> in the statement: follow the link under the cursor -- an inline link or
+--- a diagram -- or toggle the hint accordion under it.
 local function activate(s)
   local cursor = vim.api.nvim_win_get_cursor(s.desc_win)
   local row, col = cursor[1] - 1, cursor[2]
