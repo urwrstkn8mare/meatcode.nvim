@@ -73,18 +73,6 @@ function M.user_code(problem_id, cb)
   end, cb)
 end
 
---- Push local code back up to neetcode.io so the web editor stays in sync.
-function M.save_user_code(problem_id, lang, code, cb)
-  authed(function(token, done)
-    client.dispatch("saveUserCode", {
-      problemId = problem_id,
-      lang = lang,
-      tabs = { { name = "main", code = code } },
-      activeTabIndex = 0,
-    }, { token = token }, done)
-  end, cb)
-end
-
 --- One visible test case input, by index.
 function M.test_case_input(problem_id, index, cb)
   authed(function(token, done)

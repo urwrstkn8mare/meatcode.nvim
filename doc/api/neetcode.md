@@ -106,7 +106,6 @@ recovers the expected output. That is exactly what `lua/meatcode/runner` does.
 | `runCodeFunctionHttp` | `{problemId, rawCode, lang, testCases}` | Judge0-style result per case |
 | `executeCodeFunctionHttp` | `{problemId, rawCode, lang}` | Submit against the hidden suite |
 | `callableFunctionHttp` | `{functionId: "getUserCode", problemId}` | Code saved from the web editor |
-| `callableFunctionHttp` | `{functionId: "saveUserCode", problemId, lang, tabs, activeTabIndex}` | |
 | `callableFunctionHttp` | `{functionId: "getTestCaseInput", problemId, testCaseIndex}` | One visible input |
 | `callableFunctionHttp` | `{functionId: "getUserStreakData"}` | `{currentStreak, maxStreak, joined, activityByDate: {"YYYY-MM-DD" (UTC): {count}}, ...}` |
 | `callableFunctionHttp` | `{functionId: "getUserDailyActivity", date}` | `{submissions: [{problemId, problemName, status, language, timestamp, ...}]}` for one UTC day |

@@ -30,10 +30,6 @@ function M.saved_code(problem, lang, cb)
   api.user_code(id(problem), cb)
 end
 
-function M.save_code(problem, lang, code, cb)
-  api.save_user_code(id(problem), lang, code, cb)
-end
-
 function M.normalize_submission(data)
   local status = data.status and data.status.description or "Unknown"
   local failing = type(data.last_executed_test_case) == "table" and data.last_executed_test_case or {}

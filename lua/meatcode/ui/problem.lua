@@ -614,7 +614,7 @@ local function reset_local(s, starter)
   end
 end
 
---- Restore the open problem to its selected provider's starter code.
+--- Restore the open problem to its starter code.
 function M.reset()
   local s = ready()
   if not s then return end
@@ -625,42 +625,10 @@ function M.reset()
   if local_err then return util.err(local_err) end
   s.failed_input = nil
 
-  local backend = providers.get(s.content_provider)
-  if not backend.save_code then
-    render_ready(s)
-    return util.notify(s.problem.name .. " reset locally; completion count is unchanged")
-  end
-
-  s.busy = true
-  results.running(s.res_buf, "Resetting " .. s.problem.name)
-  backend.save_code(s.problem, s.lang, starter, function(err)
-    vim.schedule(function()
-      s.busy = false
-      if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then render_ready(s) end
-      pcall(render_description, s)
-      pcall(function() require("meatcode.ui.roadmap").refresh() end)
-      if err then return util.err("reset locally, but could not sync starter code: " .. err) end
-      util.notify(s.problem.name .. " reset to starter code")
-    end)
-  end)
-end
-
---- Push the current buffer to the selected provider when it exposes saved code.
-function M.push()
-  local s = current_session()
-  if not s then return util.err("no problem is open — use :MeatCode to pick one") end
-  local backend = providers.get(s.content_provider)
-  if not backend.save_code then return util.err(backend.label .. " does not expose saved editor code") end
-  save(s)
-  backend.save_code(s.problem, s.lang, current_code(s), function(err)
-    vim.schedule(function()
-      if err then
-        util.err("could not sync code: " .. err)
-      else
-        util.notify("code pushed to " .. backend.label)
-      end
-    end)
-  end)
+  render_ready(s)
+  pcall(render_description, s)
+  pcall(function() require("meatcode.ui.roadmap").refresh() end)
+  util.notify(s.problem.name .. " reset to starter code")
 end
 
 local function drop_session(s)
