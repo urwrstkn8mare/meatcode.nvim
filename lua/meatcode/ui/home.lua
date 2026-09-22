@@ -42,8 +42,20 @@ local function render()
   local summary = progress.summary(config.options.list)
   local keys = config.options.keys.home or {}
 
-  local lines, spans, rows = { "", "  meatcode.nvim", "" }, {}, {}
-  table.insert(spans, { 1, 2, 2 + #"meatcode.nvim", "MeatCodeHeader" })
+  -- 🍖 on the left, CODE on the right: the meat *is* the ascii art.
+  local title = {
+    "   _  _   ___  _____  ___ ___  ___  ___ ",
+    " _| || |_/ _ \\/__  / / __/ _ \\/ _ \\/ _ \\",
+    "|_  ..  _|  __/  / / | (_| (_)  __/  __/ ",
+    "|_      _|\\___/  /_/  \\___\\___/\\___/\\___|",
+    "  |_||_|                                 ",
+  }
+  local lines, spans, rows = { "" }, {}, {}
+  for _, art in ipairs(title) do
+    table.insert(lines, "  " .. art)
+    table.insert(spans, { #lines - 1, 2, 2 + #art, "MeatCodeHeader" })
+  end
+  table.insert(lines, "")
 
   local function section(title)
     table.insert(lines, "  " .. title)
@@ -144,8 +156,8 @@ function M.open()
   tabs.name_buffer(state.buf, "home")
   tabs.set(state.tab, "home")
 
-  local width = math.min(vim.o.columns - 8, 72)
-  local height = math.min(vim.o.lines - 8, 30)
+  local width = math.min(vim.o.columns - 4, 72)
+  local height = math.min(vim.o.lines - 6, 34)
   state.win = vim.api.nvim_open_win(state.buf, true, {
     relative = "editor",
     width = width,

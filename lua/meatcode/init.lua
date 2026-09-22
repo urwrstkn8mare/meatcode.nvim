@@ -85,7 +85,7 @@ function M.logout(provider)
 end
 
 function M.status()
-  require("meatcode.ui.home").open()
+  util.err(":MeatCode status was removed — :MeatCode opens the homepage now")
 end
 
 function M.set_lang(name)
