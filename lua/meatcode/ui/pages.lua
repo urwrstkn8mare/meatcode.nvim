@@ -70,7 +70,7 @@ function M.pop()
   return M.pop()
 end
 
---- Drop every page without revealing anything (jumping to a problem tab).
+--- Drop every page without revealing anything.
 function M.clear()
   while #stack > 0 do
     local page = table.remove(stack)
@@ -85,6 +85,25 @@ end
 function M.buf()
   local page = current()
   return page and page.buf or nil
+end
+
+--- Show the top page in the current window. Used when closing a problem tab so
+--- q/:q lands back on home/roadmap/drilldown instead of an empty buffer.
+---@return boolean
+function M.reveal()
+  local page = current()
+  if not (page and page.buf and vim.api.nvim_buf_is_valid(page.buf)) then
+    return false
+  end
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, page.buf)
+  page.win = win
+  page.tab = vim.api.nvim_get_current_tabpage()
+  dress(win)
+  tabs.name_buffer(page.buf, page.title)
+  tabs.set(page.tab, page.title)
+  if page.on_show then pcall(page.on_show) end
+  return true
 end
 
 return M

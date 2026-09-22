@@ -1,5 +1,4 @@
 local catalog = require("meatcode.catalog.problems")
-local pages = require("meatcode.ui.pages")
 local progress = require("meatcode.progress")
 local providers = require("meatcode.providers")
 local util = require("meatcode.util")
@@ -137,7 +136,7 @@ local function open_picker(query)
         if not selected then return end
         actions.close(prompt_buf)
         state.prompt_buf, state.picker = nil, nil
-        pages.clear()
+        -- Leave the page stack alone so closing the problem can reveal it.
         require("meatcode.ui.problem").open(selected.value)
       end)
       local function open_browser()

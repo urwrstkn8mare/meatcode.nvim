@@ -4,6 +4,7 @@ local config = require("meatcode.config")
 local description = require("meatcode.ui.description")
 local hl = require("meatcode.ui.highlight")
 local lang_info = require("meatcode.lang")
+local pages = require("meatcode.ui.pages")
 local progress = require("meatcode.progress")
 local results = require("meatcode.ui.results")
 local runner = require("meatcode.runner")
@@ -667,6 +668,34 @@ local function drop_session(s)
   sessions[session_key(s.problem)] = nil
 end
 
+--- Floating windows (LSP hover, signature help, the roadmap, image.nvim,
+--- nvim-notify, completion docs, …) share a problem tab but are not part of
+--- the three-pane layout. Closing one must not take the problem down with it.
+local function is_float(win)
+  local ok, cfg = pcall(vim.api.nvim_win_get_config, win)
+  return ok and cfg.relative ~= nil and cfg.relative ~= ""
+end
+
+--- Collapse splits in the current tab and show the page underneath this problem
+--- (home / roadmap / topic list). Falls back to an empty buffer when nothing is
+--- on the stack — e.g. a problem opened with no MeatCode UI behind it.
+local function restore_after_close(tab)
+  if tab and vim.api.nvim_tabpage_is_valid(tab) then
+    pcall(vim.api.nvim_set_current_tabpage, tab)
+  end
+  local keep = vim.api.nvim_get_current_win()
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_get_current_tabpage())) do
+    if win ~= keep and not is_float(win) then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+  end
+  if pages.reveal() then
+    return
+  end
+  pcall(vim.cmd, "enew")
+  tabs.clear(vim.api.nvim_get_current_tabpage())
+end
+
 function M.close(s)
   s = s or current_session()
   if not s or s.closing then
@@ -680,26 +709,17 @@ function M.close(s)
   if tab and vim.api.nvim_tabpage_is_valid(tab) then
     if #vim.api.nvim_list_tabpages() > 1 then
       pcall(vim.cmd, vim.api.nvim_tabpage_get_number(tab) .. "tabclose")
-    else
-      -- Last tab cannot be closed; collapse the layout to an empty buffer.
-      pcall(vim.api.nvim_set_current_tabpage, tab)
-      pcall(vim.cmd, "enew")
-      local keep = vim.api.nvim_get_current_win()
-      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-        if win ~= keep then
-          pcall(vim.api.nvim_win_close, win, true)
-        end
+      -- Refresh / repair the page we landed on (blank scratch after an old clear,
+      -- or a stale tab title after solving).
+      if pages.buf() then
+        pages.reveal()
       end
+    else
+      restore_after_close(tab)
     end
+  elseif pages.depth() > 0 then
+    restore_after_close(nil)
   end
-end
-
---- Floating windows (LSP hover, signature help, the roadmap, image.nvim,
---- nvim-notify, completion docs, …) share a problem tab but are not part of
---- the three-pane layout. Closing one must not take the problem down with it.
-local function is_float(win)
-  local ok, cfg = pcall(vim.api.nvim_win_get_config, win)
-  return ok and cfg.relative ~= nil and cfg.relative ~= ""
 end
 
 --- Re-apply the pane proportions against the current terminal size. Called at

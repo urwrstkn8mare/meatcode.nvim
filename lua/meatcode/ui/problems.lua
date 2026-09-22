@@ -102,7 +102,8 @@ local function keymaps()
     if not p then
       return
     end
-    M.close()
+    -- Keep this page on the stack; the problem opens in a new tab and closing
+    -- it should land back here rather than skipping to the roadmap.
     require("meatcode.ui.problem").open(p)
   end, "open problem")
 
