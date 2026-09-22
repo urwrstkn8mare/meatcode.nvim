@@ -903,6 +903,13 @@ end
 --- a per-problem header carrying that problem's own helper types. Nothing here
 --- reaches the judge, and your solution file is left exactly as you wrote it.
 local CLANGD_MARKER = "Written by meatcode.nvim"
+-- Prior names of this plugin. A `.clangd` carrying one of these is ours and
+-- must be rewritten so force-includes keep pointing at the current support dir.
+local CLANGD_MARKERS = {
+  CLANGD_MARKER,
+  "Written by eetCode.nvim",
+  "Written by neetcode.nvim",
+}
 
 local function support_dir()
   return config.options.solutions_dir .. "/.meatcode"
@@ -1078,11 +1085,18 @@ local function ensure_clangd(problem_id, starter)
 
   local existing = util.read_file(clangd_path())
   -- A third-party `.clangd` that already matches `runner.cpp.cmd` is left
-  -- alone. Ours, a missing file, or one with the wrong language mode is not.
-  if existing
-    and not existing:find(CLANGD_MARKER, 1, true)
-    and not clangd_disagrees_with_cmd(existing)
-  then
+  -- alone. Ours (including pre-rename markers), a missing file, or one with
+  -- the wrong language mode is not.
+  local managed = false
+  if existing then
+    for _, marker in ipairs(CLANGD_MARKERS) do
+      if existing:find(marker, 1, true) then
+        managed = true
+        break
+      end
+    end
+  end
+  if existing and not managed and not clangd_disagrees_with_cmd(existing) then
     return
   end
 
@@ -1098,7 +1112,32 @@ local function ensure_clangd(problem_id, starter)
 
   write_types(dir, problem_id, starter)
   backfill_types(dir)
+  local before = existing
   rebuild_clangd(existing)
+  if before ~= util.read_file(clangd_path()) then
+    vim.schedule(function()
+      local bufs = {}
+      for _, client in ipairs(vim.lsp.get_clients({ name = "clangd" })) do
+        for _, buf in ipairs(vim.lsp.get_buffers_by_client_id(client.id)) do
+          bufs[buf] = true
+        end
+        pcall(function()
+          client:stop(true)
+        end)
+      end
+      -- Re-fire FileType so clangd attaches again against the new config.
+      vim.schedule(function()
+        for buf in pairs(bufs) do
+          if vim.api.nvim_buf_is_valid(buf) then
+            pcall(vim.api.nvim_exec_autocmds, "FileType", {
+              buffer = buf,
+              modeline = false,
+            })
+          end
+        end
+      end)
+    end)
+  end
 end
 
 --- Seed from a provider's saved editor only when that capability exists. Every
