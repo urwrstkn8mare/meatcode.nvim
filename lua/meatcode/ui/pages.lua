@@ -95,6 +95,12 @@ function M.reveal()
   if not (page and page.buf and vim.api.nvim_buf_is_valid(page.buf)) then
     return false
   end
+  -- Callers may invoke this from whatever tab a prior `:tabclose` happened to
+  -- land on (Vim's post-close focus target is not guaranteed to be the page's
+  -- own tab), so jump there explicitly instead of trusting "current window".
+  if page.tab and vim.api.nvim_tabpage_is_valid(page.tab) then
+    pcall(vim.api.nvim_set_current_tabpage, page.tab)
+  end
   local win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(win, page.buf)
   page.win = win
@@ -105,5 +111,20 @@ function M.reveal()
   if page.on_show then pcall(page.on_show) end
   return true
 end
+
+--- Re-assert the page's window-local look on every tab switch. Nothing above
+--- should ever leave a page dressed with numbers/signs on, but a stray path
+--- (manual gt/gT, a `:tabclose` focus quirk, a future bug) is cheap insurance
+--- against a window silently keeping the wrong local options.
+vim.api.nvim_create_autocmd("TabEnter", {
+  group = vim.api.nvim_create_augroup("MeatCodePagesDress", { clear = true }),
+  callback = function()
+    local page = current()
+    if not (page and page.buf and vim.api.nvim_buf_is_valid(page.buf)) then return end
+    local win = vim.fn.bufwinid(page.buf)
+    if win == -1 or vim.api.nvim_win_get_tabpage(win) ~= vim.api.nvim_get_current_tabpage() then return end
+    dress(win)
+  end,
+})
 
 return M

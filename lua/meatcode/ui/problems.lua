@@ -3,6 +3,7 @@ local config = require("meatcode.config")
 local hl = require("meatcode.ui.highlight")
 local pages = require("meatcode.ui.pages")
 local progress = require("meatcode.progress")
+local providers = require("meatcode.providers")
 local util = require("meatcode.util")
 
 --- Problem list for a single roadmap topic, as a full page on the nav stack.
@@ -62,7 +63,8 @@ local function render()
     table.insert(entries, { text = line, spans = row_spans })
   end
 
-  local width = vim.api.nvim_win_get_width(0)
+  local win = vim.fn.bufwinid(state.buf)
+  local width = (win ~= -1) and vim.api.nvim_win_get_width(win) or vim.o.columns
   local block_width = 0
   for _, entry in ipairs(entries) do
     block_width = math.max(block_width, vim.fn.strdisplaywidth(entry.text))
@@ -103,8 +105,14 @@ local function keymaps()
       return
     end
     -- Keep this page on the stack; the problem opens in a new tab and closing
-    -- it should land back here rather than skipping to the roadmap.
-    require("meatcode.ui.problem").open(p)
+    -- it should land back here rather than skipping to the roadmap. Guard
+    -- against building two tabs when <CR> lands on a second problem before
+    -- the first one has finished prepping.
+    local key = providers.problem_key(p)
+    state.pending_key = key
+    require("meatcode.ui.problem").open(p, {
+      guard = function() return state.pending_key == key end,
+    })
   end, "open problem")
 
   map("q", M.close, "back")

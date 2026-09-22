@@ -189,38 +189,43 @@ local function merge_oracles(base, metas, order, lang)
   end
 end
 
---- Fetch every provider in the content fallback chain, then apply stage-major
---- oracle precedence across them. Metadata failures from optional providers do
---- not prevent the selected content provider from opening.
+--- Fetch just the selected provider's metadata. Its own reference/editorial/
+--- community solutions (enriched inside `fetch_provider_meta`) are already
+--- enough to open with a working local oracle; the rest of the content chain
+--- is optional bonus material fetched later by `augment_oracles` so extra
+--- fallback providers never delay getting into the problem.
 local function fetch_meta(problem, provider_name, lang, cb, status)
   if status then status("Loading statement, starter and examples from "
       .. providers.get(provider_name).label .. "…") end
   fetch_provider_meta(problem, provider_name, lang, function(err, base)
     if err then return cb(err, base) end
-    local order = providers.candidates(problem, "content")
-    if not vim.tbl_contains(order, provider_name) then table.insert(order, 1, provider_name) end
-    local metas, index = { [provider_name] = base }, 1
-    local function step()
-      local name = order[index]
-      index = index + 1
-      if not name then
-        merge_oracles(base, metas, order, lang)
-        return cb(nil, base)
-      end
-      if metas[name] then return step() end
-      if status then status("Checking " .. providers.get(name).label
-          .. " for stronger oracle stages…") end
-      fetch_provider_meta(problem, name, lang, function(provider_err, meta)
-        if provider_err and status then
-          status(providers.get(name).label
-            .. " unavailable; continuing with the remaining sources.")
-        end
-        if meta then metas[name] = meta end
-        step()
-      end, status)
-    end
-    step()
+    merge_oracles(base, { [provider_name] = base }, { provider_name }, lang)
+    cb(nil, base)
   end, status)
+end
+
+--- Fetch the rest of the content fallback chain in the background, after the
+--- problem is already open, and re-merge oracle stages across every provider
+--- that answers. `on_done` is only called when this actually adds providers.
+local function augment_oracles(s, provider_name, lang, on_done)
+  local order = providers.candidates(s.problem, "content")
+  if not vim.tbl_contains(order, provider_name) then table.insert(order, 1, provider_name) end
+  if #order <= 1 then return end
+  local metas, index = { [provider_name] = s.meta }, 1
+  local function step()
+    local name = order[index]
+    index = index + 1
+    if not name then
+      merge_oracles(s.meta, metas, order, lang)
+      return on_done()
+    end
+    if metas[name] then return step() end
+    fetch_provider_meta(s.problem, name, lang, function(_, meta)
+      if meta then metas[name] = meta end
+      step()
+    end)
+  end
+  step()
 end
 
 local function solution_path(problem, lang)
@@ -1130,28 +1135,38 @@ end
 
 --- Seed from a provider's saved editor only when that capability exists. Every
 --- provider shares the same on-disk solution, and an existing file always wins.
+--- The starter code is written and handed back immediately — opening the
+--- problem never waits on the saved-code network round trip; if a saved
+--- version shows up afterward and the user has not typed anything yet, it is
+--- patched into the still-fresh buffer.
 local function seed_file(s, path, cb)
   local starter = (s.meta.starterCode or {})[s.lang] or ""
   if s.lang == "cpp" then ensure_clangd(util.slug(providers.filename(s.problem)), starter) end
   if vim.uv.fs_stat(path) then return cb() end
 
+  util.write_file(path, starter)
+
   local backend = providers.get(s.content_provider)
-  if not backend.saved_code then
-    util.write_file(path, starter)
-    return vim.schedule(cb)
+  if backend.saved_code then
+    backend.saved_code(s.problem, s.lang, function(err, data)
+      vim.schedule(function()
+        if err or not session_alive(s) then return end
+        if not (s.code_buf and vim.api.nvim_buf_is_valid(s.code_buf)) then return end
+        if vim.bo[s.code_buf].modified then return end
+        local code_tabs = type(data) == "table" and (data.tabs or (data.code and { { code = data.code } }))
+        local code = type(code_tabs) == "table" and code_tabs[1]
+          and type(code_tabs[1].code) == "string"
+          and (data.lang == nil or data.lang == s.lang)
+          and code_tabs[1].code or nil
+        if not (code and code ~= "" and code ~= starter) then return end
+        vim.api.nvim_buf_set_lines(s.code_buf, 0, -1, false, vim.split(code, "\n", { plain = true }))
+        vim.bo[s.code_buf].modified = false
+        util.write_file(path, code)
+      end)
+    end)
   end
-  backend.saved_code(s.problem, s.lang, function(err, data)
-    local code
-    if not err and type(data) == "table" then
-      local code_tabs = data.tabs or (data.code and { { code = data.code } })
-      if type(code_tabs) == "table" and code_tabs[1] and type(code_tabs[1].code) == "string"
-        and (data.lang == nil or data.lang == s.lang) then
-        code = code_tabs[1].code
-      end
-    end
-    util.write_file(path, (code and code ~= "" and code) or starter)
-    vim.schedule(cb)
-  end)
+
+  vim.schedule(cb)
 end
 
 local function build_windows(s)
@@ -1206,13 +1221,21 @@ local function initial_candidates(problem, forced)
 end
 
 ---@param problem table catalog entry
----@param opts table|nil lang, provider
+---@param opts table|nil lang, provider, guard (fun():boolean — checked right
+---before taking over the screen; a false result quietly drops this open),
+---will_show (fun() — called right before the tab/focus switch happens, e.g.
+---to close a picker that was left open during prep)
 function M.open(problem, opts)
   opts = opts or {}
+  local function wanted()
+    return not opts.guard or opts.guard()
+  end
   local key = session_key(problem)
   if not key then return util.err("problem has no provider identifier") end
   local existing = sessions[key]
   if session_alive(existing) then
+    if not wanted() then return end
+    if opts.will_show then opts.will_show() end
     focus_session(existing)
     return
   end
@@ -1259,7 +1282,10 @@ function M.open(problem, opts)
       vim.schedule(function()
         if session_alive(sessions[key]) then
           opening[key] = nil
-          focus_session(sessions[key])
+          if wanted() then
+            if opts.will_show then opts.will_show() end
+            focus_session(sessions[key])
+          end
           return
         end
         local available = meta.availableLanguages or {}
@@ -1287,9 +1313,17 @@ function M.open(problem, opts)
         seed_file(s, s.path, function()
           if session_alive(sessions[key]) then
             opening[key] = nil
-            focus_session(sessions[key])
+            if wanted() then
+              if opts.will_show then opts.will_show() end
+              focus_session(sessions[key])
+            end
             return
           end
+          if not wanted() then
+            opening[key] = nil
+            return
+          end
+          if opts.will_show then opts.will_show() end
           build_windows(s)
           opening[key] = nil
           render_description(s)
@@ -1297,6 +1331,13 @@ function M.open(problem, opts)
           render_ready(s)
           status("Ready: local runs will resolve reference → editorial → community → statement.")
           discover_providers(s)
+          augment_oracles(s, provider, lang, function()
+            vim.schedule(function()
+              if session_alive(s) and s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+                render_ready(s)
+              end
+            end)
+          end)
         end)
       end)
     end, status)

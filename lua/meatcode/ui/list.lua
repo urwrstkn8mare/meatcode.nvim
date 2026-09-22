@@ -174,14 +174,23 @@ local function open_picker(query)
     layout_config = { width = 9999, height = 9999, prompt_position = "top" },
     attach_mappings = function(prompt_buf, map)
       state.prompt_buf = prompt_buf
+      local closed = false
       local function close()
-        actions.close(prompt_buf)
-        state.prompt_buf, state.picker = nil, nil
+        if closed then return end
+        closed = true
+        pcall(actions.close, prompt_buf)
+        if state.prompt_buf == prompt_buf then state.prompt_buf, state.picker = nil, nil end
       end
       local function open_selected(problem)
-        close()
-        -- Leave the page stack alone so closing the problem can reveal it.
-        require("meatcode.ui.problem").open(problem)
+        local key = providers.problem_key(problem)
+        state.opening_key = key
+        -- Leave the list (and the page stack under it) open while the
+        -- problem preps in the background; only take over the screen once
+        -- it is actually ready, and only if nothing else was picked meanwhile.
+        require("meatcode.ui.problem").open(problem, {
+          guard = function() return state.opening_key == key end,
+          will_show = close,
+        })
       end
       local function unsupported(problem)
         util.err(problem.name .. " doesn't support " .. lang_info.name(config.options.lang))

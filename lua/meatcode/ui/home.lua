@@ -128,7 +128,8 @@ local function render()
   if not is_open() then return end
   local all = problem_catalog.get() or problem_catalog.load()
   local keys = config.options.keys.home or {}
-  local width = vim.api.nvim_win_get_width(0)
+  local win = vim.fn.bufwinid(state.buf)
+  local width = (win ~= -1) and vim.api.nvim_win_get_width(win) or vim.o.columns
 
   local title = {}
   for _, art in ipairs(MEAT) do

@@ -92,7 +92,8 @@ local function render()
     return
   end
 
-  local width = vim.api.nvim_win_get_width(0)
+  local win = vim.fn.bufwinid(state.buf)
+  local width = (win ~= -1) and vim.api.nvim_win_get_width(win) or vim.o.columns
 
   -- First run: there is no catalog yet. Say so rather than drawing a roadmap
   -- of empty progress bars; the update listener re-renders when it arrives.
