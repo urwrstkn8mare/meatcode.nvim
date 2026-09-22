@@ -119,6 +119,7 @@ the roadmap for the full set).
 - More languages (Java, Go, Rust, TypeScript)
 - Notes per problem, kept beside the solution file
 - A solved/attempted filter in the finder, driven by the shared history
+- Backfill LintCode submission history for progress counting
 
 ## Notes and thanks
 
