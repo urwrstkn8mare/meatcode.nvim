@@ -1,7 +1,7 @@
 # meatcode.nvim
 
 LeetCode/NeetCode/LintCode without leaving Neovim. Browse NeetCode's roadmap or
-a merged catalog, solve locally, submit to any of the three.
+a merged catalog, solve/test locally, submit to any of the three.
 
 ![The meatcode.nvim homepage](doc/screenshot.png)
 
