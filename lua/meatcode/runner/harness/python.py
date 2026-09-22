@@ -581,7 +581,7 @@ def replay(cls, ops, anns):
     return out
 
 
-def run_class_cases(workdir, report, oracle):
+def run_class_cases(workdir, report, oracle, shard=0, stride=1):
     """Design problems: replay the recorded call sequence and grade the returns.
 
     Under the reference oracle the same sequence runs against NeetCode's class
@@ -605,6 +605,8 @@ def run_class_cases(workdir, report, oracle):
     published = load_expected(workdir, len(cases)) if oracle == "expected" else None
 
     for i, ops in enumerate(cases):
+        if i % stride != shard:
+            continue
         entry = {"index": i, "input": raw_cases[i] if i < len(raw_cases) else ""}
 
         judged = True
@@ -650,7 +652,7 @@ def public_methods(cls):
     return [n for n, v in vars(cls).items() if callable(v) and not n.startswith("_")]
 
 
-def run_roundtrip_cases(workdir, report, oracle):
+def run_roundtrip_cases(workdir, report, oracle, shard=0, stride=1):
     """Encode/decode pairs: push the input through both halves and compare.
 
     The pair has to invert itself, so with no reference solution the input is
@@ -693,6 +695,8 @@ def run_roundtrip_cases(workdir, report, oracle):
         return normalize(getattr(obj, decode)(getattr(obj, encode)(*call)))
 
     for i, block in enumerate(cases):
+        if i % stride != shard:
+            continue
         args = parse_input(block)
         entry = {"index": i, "input": block}
 
@@ -742,12 +746,14 @@ def main():
     workdir = sys.argv[1]
     mode = sys.argv[2] if len(sys.argv) > 2 else "function"
     oracle = sys.argv[3] if len(sys.argv) > 3 else "reference"
+    shard = int(sys.argv[4]) if len(sys.argv) > 4 else 0
+    stride = int(sys.argv[5]) if len(sys.argv) > 5 else 1
     report = {"ok": True, "cases": []}
 
     if mode in ("class", "roundtrip"):
         runner = run_class_cases if mode == "class" else run_roundtrip_cases
         try:
-            runner(workdir, report, oracle)
+            runner(workdir, report, oracle, shard, stride)
         except Unsupported as exc:
             report.update(ok=False, unsupported=True, error=str(exc))
         except Exception:
@@ -789,6 +795,8 @@ def main():
     published = load_expected(workdir, len(cases)) if oracle == "expected" else None
 
     for i, block in enumerate(cases):
+        if i % stride != shard:
+            continue
         args = parse_input(block)
         entry = {"index": i, "input": block}
 

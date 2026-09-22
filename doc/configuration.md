@@ -30,6 +30,9 @@ require("meatcode").setup({
     -- true requires bubblewrap and fails closed when it is unavailable.
     -- false executes that code with your normal user permissions.
     sandbox = true,
+    -- Independent cases use separate processes. 0 = auto (up to CPU count),
+    -- 1 = sequential, N = at most N concurrent workers.
+    parallelism = 0,
     python = { cmd = { "python3" } },
     cpp = {
       -- {source} and {out} are substituted at build time. Debug symbols and

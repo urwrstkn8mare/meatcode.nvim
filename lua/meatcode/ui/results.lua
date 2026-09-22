@@ -81,6 +81,11 @@ function M.render_run(buf, result)
           unjudged),
         "MeatCodeMuted")
     end
+    if (result.parallelism or 1) > 1 then
+      push(lines, spans,
+        string.format("     %d test workers ran cases in parallel", result.parallelism),
+        "MeatCodeMuted")
+    end
     push(lines, spans, "")
 
     for _, c in ipairs(result.cases) do

@@ -292,23 +292,68 @@ local function sandbox_command(cmd, dir, required)
   return wrapped, true
 end
 
---- Run the compiled/interpreted harness and hand back a report.
-local function execute(cmd, dir, cb, debug_crash, untrusted)
-  local timeout_ms = (config.options.runner.time_limit or 10) * 1000
-  local isolated, sandboxed_or_err = sandbox_command(cmd, dir, untrusted)
-  if not isolated then return fail(cb, sandboxed_or_err, true) end
-  vim.system(isolated, { text = true, cwd = dir, timeout = timeout_ms * 6 }, function(res)
-    vim.schedule(function()
-      local report = decode_report(res.stdout or "")
-      if report then
-        return cb(summarize(report))
-      end
+local function parallelism(case_count)
+  local configured = config.options.runner.parallelism
+  if configured == false then return 1 end
+  configured = tonumber(configured) or 0
+  local ceiling = configured > 0 and configured or vim.uv.available_parallelism()
+  return math.max(1, math.min(case_count, ceiling))
+end
 
-      -- No report: the process died. Attribute it to the last announced case.
-      finish_failure(res, isolated, dir, timeout_ms,
-        debug_crash and not sandboxed_or_err, cb)
+function M.parallelism(case_count)
+  return parallelism(case_count)
+end
+
+--- Run independent case shards concurrently, then restore stable case order.
+local function execute(cmd, dir, case_count, cb, debug_crash, untrusted)
+  local timeout_ms = (config.options.runner.time_limit or 10) * 1000
+  local shards = parallelism(case_count)
+  local commands = {}
+  for shard = 0, shards - 1 do
+    local shard_cmd = vim.deepcopy(cmd)
+    if shards > 1 then
+      table.insert(shard_cmd, tostring(shard))
+      table.insert(shard_cmd, tostring(shards))
+    end
+    local isolated, sandboxed_or_err = sandbox_command(shard_cmd, dir, untrusted)
+    if not isolated then return fail(cb, sandboxed_or_err, true) end
+    table.insert(commands, { cmd = isolated, sandboxed = sandboxed_or_err })
+  end
+
+  local pending, reports, failure = #commands, {}, nil
+  for _, command in ipairs(commands) do
+    vim.system(command.cmd, { text = true, cwd = dir, timeout = timeout_ms * 6 }, function(res)
+      vim.schedule(function()
+        local report = decode_report(res.stdout or "")
+        if report then
+          table.insert(reports, report)
+        elseif not failure then
+          failure = { res = res, cmd = command.cmd, sandboxed = command.sandboxed }
+        end
+        pending = pending - 1
+        if pending > 0 then return end
+        if failure then
+          return finish_failure(failure.res, failure.cmd, dir, timeout_ms,
+            debug_crash and shards == 1 and not failure.sandboxed, cb)
+        end
+
+        local merged = { ok = true, cases = {}, parallelism = shards }
+        for _, report_part in ipairs(reports) do
+          vim.list_extend(merged.cases, report_part.cases or {})
+          merged.method = merged.method or report_part.method
+          if report_part.ok == false then
+            merged.ok = false
+            merged.unsupported = merged.unsupported or report_part.unsupported
+            merged.error = merged.error or report_part.error
+          end
+        end
+        table.sort(merged.cases, function(a, b)
+          return (a.index or 0) < (b.index or 0)
+        end)
+        cb(summarize(merged))
+      end)
     end)
-  end)
+  end
 end
 
 --- The source the harness reads the signature from: the reference solution when
@@ -354,7 +399,7 @@ local function run_python(problem_id, code, meta, cases, cb, oracle)
   table.insert(py, dir)
   table.insert(py, "function")
   table.insert(py, oracle)
-  execute(py, dir, cb, false, meta._untrusted_user or oracle == "reference")
+  execute(py, dir, #cases, cb, false, meta._untrusted_user or oracle == "reference")
 end
 
 --- Design problems: normalise the call sequence, then replay it in the harness.
@@ -390,7 +435,7 @@ local function run_python_class(problem_id, code, meta, cases, cb, mode, oracle)
   table.insert(py, dir)
   table.insert(py, mode)
   table.insert(py, oracle)
-  execute(py, dir, cb, false, meta._untrusted_user or oracle == "reference")
+  execute(py, dir, #cases, cb, false, meta._untrusted_user or oracle == "reference")
 end
 
 local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle)
@@ -463,7 +508,7 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle)
         end
         return fail(cb, msg)
       end
-      execute({ bin, dir }, dir, cb, true, untrusted)
+      execute({ bin, dir }, dir, #cases, cb, true, untrusted)
     end)
   end)
 end
@@ -504,6 +549,28 @@ local function source_candidates(meta, lang)
   return out
 end
 
+local function validation_path(problem_id, lang)
+  return string.format("%s/oracle-validations/%s-%s.json",
+    config.options.cache_dir, util.slug(tostring(problem_id)), lang)
+end
+
+local function saved_selection(problem_id, lang, meta)
+  return meta._selected_oracle or util.read_json(validation_path(problem_id, lang))
+end
+
+local function save_selection(problem_id, lang, meta, candidate, validation_key)
+  candidate.validation_key = validation_key
+  candidate.code_hash = vim.fn.sha256(candidate.code)
+  meta._selected_oracle = vim.deepcopy(candidate)
+  util.write_json(validation_path(problem_id, lang), {
+    stage = candidate.stage,
+    provider = candidate.provider,
+    id = candidate.id,
+    code_hash = candidate.code_hash,
+    validation_key = validation_key,
+  })
+end
+
 --- Pick the first executable source under stage-major/provider-minor order.
 --- Community candidates require known answers; a popularity ranking alone is
 --- never enough to make arbitrary user code an oracle.
@@ -514,25 +581,51 @@ local function resolve_source(problem_id, lang, meta, cases, cb, status)
   for i, value in ipairs(values) do
     if value ~= vim.NIL then table.insert(known, cases[i]) end
   end
+  local fingerprint_parts = {}
+  for i, value in ipairs(values) do
+    if value ~= vim.NIL then
+      table.insert(fingerprint_parts, case_key(cases[i]) .. "\0" .. tostring(value))
+    end
+  end
+  local validation_key = vim.fn.sha256(table.concat(fingerprint_parts, "\1"))
+  local selected = saved_selection(problem_id, lang, meta)
+  if type(selected) == "table" and selected.validation_key == validation_key then
+    for _, candidate in ipairs(candidates) do
+      if candidate.stage == selected.stage and candidate.provider == selected.provider
+        and (selected.code == nil or candidate.code == selected.code)
+        and (selected.code_hash == nil or vim.fn.sha256(candidate.code) == selected.code_hash) then
+        if status then
+          status(string.format("Using cached %s %s oracle",
+            candidate.provider or "local", candidate.stage))
+        end
+        return cb(candidate, {})
+      end
+    end
+    meta._selected_oracle = nil
+  end
   local index, rejected = 1, {}
   local function step()
     local candidate = candidates[index]
     index = index + 1
-    if not candidate then return cb(nil, rejected) end
-    if candidate.stage == "community" and #known == 0 then return step() end
-    if status then
-      status(string.format("Validating %s %s candidate %d/%d against known cases",
-        candidate.provider or "local", candidate.stage, index - 1, #candidates))
+    if not candidate then
+      meta._selected_oracle = nil
+      return cb(nil, rejected)
     end
-
+    if candidate.stage == "community" and #known == 0 then return step() end
     local trial_meta = vim.deepcopy(meta)
     trial_meta._oracle_code = candidate.code
     trial_meta._untrusted_user = true
     local trial_cases = #known > 0 and known or cases
     local trial_oracle = #known > 0 and "expected" or "reference"
+    if status then
+      status(string.format("Validating %s %s candidate %d/%d on %d workers",
+        candidate.provider or "local", candidate.stage, index - 1, #candidates,
+        parallelism(#trial_cases)))
+    end
     run_selected(problem_id, candidate.code, lang,
       trial_meta, trial_cases, function(report)
         if report.ok and report.total > 0 and report.passed == report.total then
+          save_selection(problem_id, lang, meta, candidate, validation_key)
           return cb(candidate, rejected)
         end
         if status then
@@ -563,9 +656,11 @@ function M.run(problem_id, code, lang, meta, cases, cb, status)
     selected._oracle_code = candidate and candidate.code or nil
     local harness_oracle = candidate and "reference" or "expected"
     if status then
-      status(candidate
+      local workers = parallelism(#cases)
+      status((candidate
         and string.format("Running with %s %s oracle", candidate.provider, candidate.stage)
         or "Running with statement and learned answers (unknown outputs are N/A)")
+        .. string.format(" on %d worker%s", workers, workers == 1 and "" or "s"))
     end
     run_selected(problem_id, code, lang, selected, cases, function(report)
       report.oracle_stage = candidate and candidate.stage or "expected"

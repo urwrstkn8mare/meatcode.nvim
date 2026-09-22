@@ -175,12 +175,16 @@ static std::string readFile(const std::string &path) {
 
 int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : ".";
+  size_t shard = argc > 2 ? std::stoull(argv[2]) : 0;
+  size_t stride = argc > 3 ? std::stoull(argv[3]) : 1;
   ncrt::JV cases = ncrt::parseJson(readFile(dir + "/cases.json"));
   ncrt::JV published = ncrt::parseJson(readFile(dir + "/expected.json"));
 
   std::string out = "{\"ok\":true,\"method\":\"%s\",\"cases\":[";
+  bool firstCase = true;
 
   for (size_t ci = 0; ci < cases.arr.size(); ci++) {
+    if (ci %% stride != shard) continue;
     // Announce progress so a hard crash can still be attributed to a case.
     std::fprintf(stderr, "CASE %%zu\n", ci);
     std::fflush(stderr);
@@ -229,7 +233,8 @@ int main(int argc, char **argv) {
       else status = "fail";
     }
 
-    if (ci) out += ",";
+    if (!firstCase) out += ",";
+    firstCase = false;
     out += "{\"index\":" + std::to_string(ci);
     out += ",\"input\":" + ncrt::tj(block);
     out += ",\"status\":" + ncrt::tj(status);
@@ -445,13 +450,17 @@ static std::string readFile(const std::string &path) {
 
 int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : ".";
+  size_t shard = argc > 2 ? std::stoull(argv[2]) : 0;
+  size_t stride = argc > 3 ? std::stoull(argv[3]) : 1;
   ncrt::JV cases = ncrt::parseJson(readFile(dir + "/ops.json"));
   ncrt::JV raw = ncrt::parseJson(readFile(dir + "/cases.json"));
   ncrt::JV published = ncrt::parseJson(readFile(dir + "/expected.json"));
 
   std::string out = "{\"ok\":true,\"method\":\"%s\",\"cases\":[";
+  bool firstCase = true;
 
   for (size_t ci = 0; ci < cases.arr.size(); ci++) {
+    if (ci %% stride != shard) continue;
     std::fprintf(stderr, "CASE %%zu\n", ci);
     std::fflush(stderr);
 
@@ -497,7 +506,8 @@ int main(int argc, char **argv) {
       else status = "fail";
     }
 
-    if (ci) out += ",";
+    if (!firstCase) out += ",";
+    firstCase = false;
     out += "{\"index\":" + std::to_string(ci);
     out += ",\"input\":" + ncrt::tj(ncrt::argAt(raw, ci).str);
     out += ",\"status\":" + ncrt::tj(status);

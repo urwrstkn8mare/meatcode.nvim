@@ -189,6 +189,13 @@ Legacy extra test cases can be added in a file next to your solution named
     nums=[0,0]
     target=0
 <
+
+Independent cases run concurrently in separate processes and are merged back
+into case order. `runner.parallelism = 0` uses up to the CPU count, `1` is
+sequential, and N caps workers at N. Validated executable oracles are cached by
+source hash plus known-answer fingerprint, so repeated/reopened runs skip the
+extra validation pass. A judge-learned answer invalidates that cache.
+
 ==============================================================================
 7. CONFIGURATION                                           *meatcode-config*
 
@@ -201,6 +208,8 @@ Defaults: >lua
       catalog_max_age = 24 * 60 * 60,
       timeout = 30,
       runner = {
+        sandbox = true,
+        parallelism = 0,
         python = { cmd = { "python3" } },
         cpp = {
           cmd = { "c++", "-std=c++23", "-g", "-O0", "-o", "{out}", "{source}" },

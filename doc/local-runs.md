@@ -115,6 +115,23 @@ None of this affects what gets submitted.
 the same `---`-separated format, is still read and folded into the initial
 suite.
 
+## Performance
+
+Cases are independent, so Python and C++ function, design and round-trip suites
+run in separate worker processes. `runner.parallelism = 0` (the default) uses
+the smaller of the case count and available CPU count; `1` is sequential and a
+larger number is an explicit worker cap. Shard reports are merged back into
+original case order, so output stays deterministic.
+
+The first executable oracle is sanity-checked as described above. Its source
+hash and the complete known-answer fingerprint are then cached under
+`stdpath("cache")/meatcode/oracle-validations/`. Repeated runs — including after
+reopening Neovim — skip that extra interpreter/compiler pass. A new answer from
+a failed submission changes the fingerprint immediately, forcing revalidation.
+
+Set `parallelism = 1` for solutions that intentionally share process-global or
+filesystem state across otherwise independent cases.
+
 ## When C++ crashes
 
 A hard crash keeps its signal number and gets a plain-English diagnosis where

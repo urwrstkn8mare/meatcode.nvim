@@ -26,6 +26,9 @@ local defaults = {
 		-- require bubblewrap and run it without network, home or host filesystem
 		-- access. Set false only to accept native code execution as your user.
 		sandbox = true,
+		-- Test cases run in separate processes. 0 uses the smaller of case count
+		-- and available CPU count; 1 forces sequential execution.
+		parallelism = 0,
 		python = { cmd = { "python3" } },
 		cpp = {
 			-- {source} and {out} are substituted at build time. Keep debug symbols
