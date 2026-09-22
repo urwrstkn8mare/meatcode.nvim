@@ -8,10 +8,6 @@ local defaults = {
 	-- Language used for starter code, local runs and submissions.
 	lang = "python",
 
-	-- Provider fallback order: the sequence `open()` tries when loading a
-	-- problem, and the order the switch-provider key cycles through.
-	provider_order = { "leetcode", "neetcode", "lintcode" },
-
 	-- Where solutions are written. Files live at <dir>/<pattern-slug>/<problem-id>.<ext>
 	solutions_dir = vim.fn.stdpath("data") .. "/meatcode/solutions",
 
@@ -75,8 +71,10 @@ local defaults = {
 			-- Fuzzy-pick one of the statement's links (provider pages,
 			-- solutions, video) and open it in the browser.
 			links = "<leader>no",
+			-- Edit the content/submit provider fallback chains.
+			configure = "<leader>nc",
 			-- Cycle the statement, starter code and judge through the
-			-- configured `provider_order` fallback chain.
+			-- content fallback chain.
 			switch_provider = "<leader>nd",
 			quit = "q",
 		},
@@ -89,9 +87,6 @@ M.defaults = defaults
 
 function M.setup(opts)
 	M.options = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
-	if type(M.options.provider_order) ~= "table" or #M.options.provider_order == 0 then
-		M.options.provider_order = vim.deepcopy(defaults.provider_order)
-	end
 	return M.options
 end
 return M

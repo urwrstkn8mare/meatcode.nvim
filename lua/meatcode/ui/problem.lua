@@ -667,7 +667,7 @@ end
 function M.toggle_provider()
   local s = ready()
   if not s then return end
-  local order = providers.order()
+  local order = providers.order("content")
   local current = 0
   for i, name in ipairs(order) do
     if name == s.provider then current = i end
@@ -1012,7 +1012,7 @@ end
 local function initial_candidates(problem, forced)
   if forced then return { forced } end
   local out = {}
-  for _, name in ipairs(providers.order()) do
+  for _, name in ipairs(providers.order("content")) do
     if providers.available(problem, name)
       or (name == "lintcode" and providers.available(problem, "leetcode")) then
       table.insert(out, name)

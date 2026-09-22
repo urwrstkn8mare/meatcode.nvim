@@ -1,12 +1,16 @@
-local config = require("meatcode.config")
-
 local M = {}
 
 --- Every known provider, in canonical order. Completion keys and solution
 --- filenames derive from this, so it never follows user configuration.
 M.NAMES = { "leetcode", "neetcode", "lintcode" }
 
+--- Fallback-chain slots. `content` chooses statement/tests/starter, `submit`
+--- chooses the judge. Chains persist in the cache dir and are edited through
+--- the <leader>nc configurator, never via setup().
+M.SLOTS = { "content", "submit" }
+
 local loaded = {}
+local chains = nil
 
 function M.known(name)
   return vim.tbl_contains(M.NAMES, name)
@@ -24,21 +28,45 @@ function M.all()
   return out
 end
 
---- The configured fallback chain: the order `open()` tries providers in and
---- the switch-provider key cycles through. Unknown names are dropped; an
---- empty result falls back to every provider.
-function M.order()
-  local configured = config.options.provider_order
-  if type(configured) ~= "table" then return M.NAMES end
+local function chains_path()
+  return require("meatcode.config").options.cache_dir .. "/provider-chains.json"
+end
+
+local function sanitize(chain)
   local out, seen = {}, {}
-  for _, name in ipairs(configured) do
+  for _, name in ipairs(type(chain) == "table" and chain or {}) do
     if M.known(name) and not seen[name] then
       seen[name] = true
       table.insert(out, name)
     end
   end
-  if #out == 0 then return M.NAMES end
+  if #out == 0 then return { unpack(M.NAMES) } end
   return out
+end
+
+local function load_chains()
+  if chains then return chains end
+  local saved = require("meatcode.util").read_json(chains_path())
+  chains = {
+    content = sanitize(saved and saved.content),
+    submit = sanitize(saved and saved.submit),
+  }
+  return chains
+end
+
+--- The fallback chain for `slot` ("content" or "submit"). Unknown names are
+--- dropped; an empty result falls back to every provider.
+function M.order(slot)
+  return { unpack(load_chains()[slot == "submit" and "submit" or "content"]) }
+end
+
+--- Replace the fallback chain for `slot` and persist it as the new default.
+---@return string[] the sanitized chain actually stored
+function M.set_order(slot, chain)
+  slot = slot == "submit" and "submit" or "content"
+  load_chains()[slot] = sanitize(chain)
+  require("meatcode.util").write_json(chains_path(), chains)
+  return M.order(slot)
 end
 
 function M.id(problem, name)
