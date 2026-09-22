@@ -70,7 +70,6 @@ require("meatcode").setup({
       reset = "<leader>nR",
       links = "<leader>no",
       configure = "<leader>nc",
-      switch_provider = "<leader>nd",
       quit = "q",
     },
   },

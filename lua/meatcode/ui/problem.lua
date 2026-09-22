@@ -160,7 +160,6 @@ local function render_ready(s)
     { keys.reset, "reset to starter code" },
     { keys.links, "open a problem link" },
     { keys.configure, "configure provider chains" },
-    { keys.switch_provider, "switch content provider" },
   }
   local key_width, label_width = 0, 0
   for _, entry in ipairs(entries) do
@@ -673,32 +672,29 @@ local function activate(s)
   pcall(vim.api.nvim_win_set_cursor, s.desc_win, { row + 1, 0 })
 end
 
---- Reopen with a specific content provider. The on-disk solution is shared and
---- is not replaced merely because the statement source changed.
-function M.switch(provider)
-  local s = ready()
-  if not s then return end
-  local problem, lang = s.problem, s.lang
-  M.close(s)
-  vim.schedule(function() M.open(problem, { provider = provider, lang = lang }) end)
-end
-
-function M.toggle_provider()
-  local s = ready()
-  if not s then return end
-  local order = providers.order("content")
-  local current = 0
-  for i, name in ipairs(order) do
-    if name == s.content_provider then current = i end
-  end
-  for offset = 1, #order do
-    local name = order[((current + offset - 1) % #order) + 1]
-    if providers.available(s.problem, name)
-      or (name == "lintcode" and providers.available(s.problem, "leetcode")) then
-      return M.switch(name)
+--- Automatically fill in the other providers for an open problem: resolve the
+--- ids we can derive, pull their (cached) metadata so topics/companies merge,
+--- and redraw once anything new lands. Keeps <leader>no honest without making
+--- the first paint wait on extra requests.
+local function discover_providers(s)
+  for _, name in ipairs(providers.NAMES) do
+    if not providers.available(s.problem, name) then
+      providers.ensure_id(s.problem, name, function(_, id)
+        if not id then return end
+        if name == "lintcode" then
+          local leetcode_id = providers.id(s.problem, "leetcode")
+          if leetcode_id then problem_catalog.remember_lintcode(leetcode_id, id) end
+        end
+        fetch_provider_meta(s.problem, name, s.lang, function()
+          vim.schedule(function()
+            if s.desc_buf and vim.api.nvim_buf_is_valid(s.desc_buf) then
+              pcall(render_description, s)
+            end
+          end)
+        end)
+      end)
     end
   end
-  util.err("this problem has no other provider")
 end
 
 function M.links()
@@ -724,7 +720,6 @@ local function keymaps(s)
     map(keys.reset, M.reset, "MeatCode: reset to starter code")
     map(keys.links, M.links, "MeatCode: open a problem link")
     map(keys.configure, M.configure, "MeatCode: configure provider chains")
-    map(keys.switch_provider, M.toggle_provider, "MeatCode: switch problem provider")
     -- A problem tab is one unit: closing a split closes the tab.
     map("<C-w>c", function() M.close(s) end, "MeatCode: close problem")
     map("<C-w>q", function() M.close(s) end, "MeatCode: close problem")
@@ -1116,6 +1111,7 @@ function M.open(problem, opts)
           render_description(s)
           keymaps(s)
           render_ready(s)
+          discover_providers(s)
         end)
       end)
     end)

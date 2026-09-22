@@ -115,7 +115,6 @@ solution on the right, results underneath.
 | `<leader>nR` | Reset the solution to the starter code |
 | `<leader>no` | Fuzzy-pick a provider/solution/video link and open it in the browser |
 | `<leader>nc` | Reorder the content/submit fallback chains (persisted as default) |
-| `<leader>nd` | Cycle the statement/tests/starter through the content chain |
 | `<CR>` or `<Tab>` | In the statement: open the hint, link, or diagram under the cursor |
 | `q` | Close the problem |
 
@@ -126,9 +125,9 @@ the first provider in the content chain that has the problem and can open it;
 `<leader>ns` submits to the first provider in the submit chain. Both chains are
 edited with `<leader>nc` and persist as the default — there is no config option.
 Paid-only problems fall through unless unlocked (any login for NeetCode/LintCode,
-Premium for LeetCode). `<leader>nd` cycles content by hand without touching your
-WIP solution; only `<leader>nR` replaces it. The empty results panel always lists
-the current keys, and `<leader>no` fuzzy-picks a link (Telescope when installed).
+Premium for LeetCode). The chains configurator is the only switch; your WIP
+solution is never replaced except by `<leader>nR`. The empty results panel always
+lists the current keys, and `<leader>no` fuzzy-picks a link (Telescope when installed).
 
 **Your solution is a real file on disk**, at
 `stdpath("data")/meatcode/solutions/<topic>/<problem>.<ext>`, so your LSP,

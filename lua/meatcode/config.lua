@@ -73,9 +73,6 @@ local defaults = {
 			links = "<leader>no",
 			-- Edit the content/submit provider fallback chains.
 			configure = "<leader>nc",
-			-- Cycle the statement, starter code and judge through the
-			-- content fallback chain.
-			switch_provider = "<leader>nd",
 			quit = "q",
 		},
 	},

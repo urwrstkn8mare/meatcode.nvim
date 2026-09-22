@@ -114,7 +114,6 @@ Solving ~
   <leader>nR            Reset to the content provider's starter code
   <leader>no            Fuzzy-pick a provider/solution/video link
   <leader>nc            Reorder the content/submit fallback chains
-  <leader>nd            Cycle statement/tests/starter through content
   <CR> or <Tab>         Statement window: toggle the hint under the cursor, or
                         follow the link under it via |vim.ui.open()|.
   q                     Close the problem (statement/results windows)
@@ -197,7 +196,6 @@ Defaults: >lua
           tests = "<leader>nt", test_failed = "<leader>na",
           reset = "<leader>nR",
           links = "<leader>no", configure = "<leader>nc",
-          switch_provider = "<leader>nd",
           quit = "q",
         },
       },

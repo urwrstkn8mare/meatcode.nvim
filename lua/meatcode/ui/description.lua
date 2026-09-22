@@ -5,6 +5,8 @@
 --- dollar signs. We fold the accordions, conceal the markup and translate the
 --- maths into the characters a terminal can actually draw. Provider links live
 --- in the <leader>no fuzzy picker, not here.
+local providers = require("meatcode.providers")
+
 local M = {}
 
 local NS = vim.api.nvim_create_namespace("meatcode_description")
@@ -366,19 +368,7 @@ function M.render(buf, problem, meta, sections, opts)
     { end_col = #badge + #sep + #status + #tail, hl_group = "MeatCodeMuted" } })
   table.insert(lines, "")
 
-  -- Provider-independent tags: the merged catalog plus whatever the fetched
-  -- metadata added, so topics/companies survive a provider switch.
-  local tags = {}
-  for _, name in ipairs(problem.topics or {}) do
-    table.insert(tags, { name = name })
-  end
-  for _, name in ipairs(problem.companies or {}) do
-    table.insert(tags, { name = name })
-  end
-  if #tags > 0 then
-    render_tags(tags, lines, marks)
-    table.insert(lines, "")
-  end
+  -- Tags and availability live in the footer; see below.
   for _, section in ipairs(sections) do
     if section.kind == "md" then
       render_md(section.text, lines, marks)
@@ -401,7 +391,43 @@ function M.render(buf, problem, meta, sections, opts)
     end
   end
 
-  -- No provider footer: <leader>no fuzzy-picks links instead.
+  -- Footer: provider-independent tags, then where the problem can be solved.
+  local function footer_row(label, value, value_group)
+    local text = string.format("%s%-11s%s", INDENT, label, value)
+    table.insert(lines, text)
+    local row_at = #lines - 1
+    table.insert(marks, { row_at, 0, { end_col = #INDENT + 11, hl_group = "MeatCodeMuted" } })
+    table.insert(marks, { row_at, #INDENT + 11, { end_col = #text, hl_group = value_group } })
+  end
+
+  local footer = {}
+  if #(problem.topics or {}) > 0 then
+    table.insert(footer, { "types", table.concat(problem.topics, " · "), "MeatCodeTag" })
+  end
+  if #(problem.companies or {}) > 0 then
+    table.insert(footer, { "companies", table.concat(problem.companies, " · "), "MeatCodeTag" })
+  end
+
+  local where = {}
+  for _, name in ipairs(providers.NAMES) do
+    local record = problem.providers and problem.providers[name]
+    if record then
+      local backend = providers.get(name)
+      local locked = record.paid and not providers.paid_unlocked(name)
+      table.insert(where, backend.label
+        .. (record.paid and (locked and " [paid · locked]" or " [paid]") or ""))
+    end
+  end
+  if #where > 0 then
+    table.insert(footer, { "available", table.concat(where, " · "), "MeatCodeMuted" })
+  end
+
+  if #footer > 0 then
+    table.insert(lines, "")
+    for _, entry in ipairs(footer) do
+      footer_row(entry[1], entry[2], entry[3])
+    end
+  end
 
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
