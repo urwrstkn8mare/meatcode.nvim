@@ -43,7 +43,11 @@ function M.render(opts)
   local ranks = opts.ranks
   local node_w, widest = M.node_width(opts.width - 2, ranks, opts.node_width)
   local h_gap = 3
-  local canvas_w = widest * node_w + (widest - 1) * h_gap
+  local graph_w = widest * node_w + (widest - 1) * h_gap
+  -- Centre the whole graph in the window, so it lines up with the centred
+  -- header above it rather than hugging the left edge.
+  local margin = math.max(0, math.floor((opts.width - graph_w) / 2))
+  local canvas_w = margin + graph_w
 
   local grid, marks = {}, {}
   local function cell(r, c, ch)
@@ -60,7 +64,7 @@ function M.render(opts)
   local row = 0
   for ri, rank in ipairs(ranks) do
     local total_w = #rank * node_w + (#rank - 1) * h_gap
-    local x = math.floor((canvas_w - total_w) / 2)
+    local x = margin + math.floor((graph_w - total_w) / 2)
     for _, name in ipairs(rank) do
       positions[name] = { row = row, col = x, rank = ri, center = x + math.floor(node_w / 2) }
       x = x + node_w + h_gap
