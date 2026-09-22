@@ -412,6 +412,7 @@ function M.check_new(lang, cb)
 
   util.notify(string.format("checking for new %s submissions…", lang_info.name(lang)))
 
+  local totals = { checked = 0, recorded = 0 }
   local errors, pending = {},
     (run_leetcode and 1 or 0) + (run_neetcode and 1 or 0) + (run_lintcode and 1 or 0)
   local function done(label, err, result)
