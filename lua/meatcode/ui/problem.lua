@@ -206,26 +206,37 @@ end
 
 --- Fetch the rest of the content fallback chain in the background, after the
 --- problem is already open, and re-merge oracle stages across every provider
---- that answers. `on_done` is only called when this actually adds providers.
+--- that answers. Every extra provider is fetched concurrently (they are
+--- independent requests) with its own progress indicator, rather than
+--- chaining them one after another. `on_done` is only called when this
+--- actually adds providers.
 local function augment_oracles(s, provider_name, lang, on_done)
   local order = providers.candidates(s.problem, "content")
   if not vim.tbl_contains(order, provider_name) then table.insert(order, 1, provider_name) end
-  if #order <= 1 then return end
-  local metas, index = { [provider_name] = s.meta }, 1
-  local function step()
-    local name = order[index]
-    index = index + 1
-    if not name then
-      merge_oracles(s.meta, metas, order, lang)
-      return on_done()
-    end
-    if metas[name] then return step() end
-    fetch_provider_meta(s.problem, name, lang, function(_, meta)
-      if meta then metas[name] = meta end
-      step()
+  local extra = {}
+  for _, name in ipairs(order) do
+    if name ~= provider_name then table.insert(extra, name) end
+  end
+  if #extra == 0 then return end
+
+  local metas, pending = { [provider_name] = s.meta }, #extra
+  for _, name in ipairs(extra) do
+    local label = providers.get(name).label
+    local handle = util.progress("Checking " .. label .. " for a stronger oracle…")
+    fetch_provider_meta(s.problem, name, lang, function(err, meta)
+      if meta then
+        metas[name] = meta
+        handle:finish(label .. " oracle sources ready")
+      else
+        handle:cancel()
+      end
+      pending = pending - 1
+      if pending == 0 then
+        merge_oracles(s.meta, metas, order, lang)
+        on_done()
+      end
     end)
   end
-  step()
 end
 
 local function solution_path(problem, lang)
@@ -1248,6 +1259,12 @@ function M.open(problem, opts)
   local lang = opts.lang or config.options.lang
   local candidate_index, provider = 0, nil
   opening[key] = true
+  -- One spinner for the whole attempt (every candidate provider it tries),
+  -- so retries read as one task updating rather than a stack of toasts.
+  local handle = util.progress("Opening " .. problem.name .. "…")
+  local function status(message)
+    vim.schedule(function() handle:report(message) end)
+  end
 
   local function start_next(last_error)
     candidate_index = candidate_index + 1
@@ -1255,18 +1272,19 @@ function M.open(problem, opts)
     if not provider then
       opening[key] = nil
       return vim.schedule(function()
+        handle:cancel()
         util.err("could not load problem: " .. tostring(last_error or "no provider succeeded"))
       end)
-    end
-    local function status(message)
-      vim.schedule(function() util.notify(message) end)
     end
     status("Opening " .. problem.name .. " from " .. providers.get(provider).label .. "…")
     fetch_meta(problem, provider, lang, function(err, meta)
       if err then
         if forced then
           opening[key] = nil
-          return vim.schedule(function() util.err("could not load problem: " .. err) end)
+          return vim.schedule(function()
+            handle:cancel()
+            util.err("could not load problem: " .. err)
+          end)
         end
         return start_next(err)
       end
@@ -1274,7 +1292,10 @@ function M.open(problem, opts)
         local label = providers.get(provider).label
         if forced then
           opening[key] = nil
-          return vim.schedule(function() util.err(problem.name .. " is paid-only on " .. label) end)
+          return vim.schedule(function()
+            handle:cancel()
+            util.err(problem.name .. " is paid-only on " .. label)
+          end)
         end
         return start_next("paid-only on " .. label)
       end
@@ -1282,6 +1303,7 @@ function M.open(problem, opts)
       vim.schedule(function()
         if session_alive(sessions[key]) then
           opening[key] = nil
+          handle:cancel()
           if wanted() then
             if opts.will_show then opts.will_show() end
             focus_session(sessions[key])
@@ -1313,6 +1335,7 @@ function M.open(problem, opts)
         seed_file(s, s.path, function()
           if session_alive(sessions[key]) then
             opening[key] = nil
+            handle:cancel()
             if wanted() then
               if opts.will_show then opts.will_show() end
               focus_session(sessions[key])
@@ -1321,6 +1344,7 @@ function M.open(problem, opts)
           end
           if not wanted() then
             opening[key] = nil
+            handle:cancel()
             return
           end
           if opts.will_show then opts.will_show() end
@@ -1329,7 +1353,7 @@ function M.open(problem, opts)
           render_description(s)
           keymaps(s)
           render_ready(s)
-          status("Ready: local runs will resolve reference → editorial → community → statement.")
+          handle:finish("Ready: local runs will resolve reference → editorial → community → statement.")
           discover_providers(s)
           augment_oracles(s, provider, lang, function()
             vim.schedule(function()

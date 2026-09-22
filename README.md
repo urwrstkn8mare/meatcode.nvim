@@ -25,6 +25,12 @@ a merged catalog, solve/test locally, submit to any of the three.
   Apple's built-in `sandbox-exec` on macOS to sandbox provider-supplied
   reference/editorial/community oracles (your solution runs separately)
 - optional: [image.nvim](https://github.com/3rd/image.nvim) for inline diagrams
+- optional: [fidget.nvim](https://github.com/j-hui/fidget.nvim) for spinners
+  on long-running steps (opening a problem, checking other providers for a
+  stronger oracle) and status updates that replace in place instead of
+  stacking a toast per step. Detected automatically if installed — nothing to
+  configure on meatcode's side. Without it (or with any other notifier),
+  everything still works through plain `vim.notify`.
 
 Only C++ and Python are supported today; PRs for more languages welcome.
 

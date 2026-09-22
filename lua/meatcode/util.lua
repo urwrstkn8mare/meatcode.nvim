@@ -5,8 +5,85 @@ local M = {}
 --- silently running without it.
 M.META_SCHEMA = 3
 
-function M.notify(msg, level)
-  vim.notify(msg, level or vim.log.levels.INFO, { title = "MeatCode" })
+--- Lazily resolved so a plugin that merely has fidget.nvim on the runtimepath
+--- (but never calls `setup()`, or hasn't loaded it yet) is never force-loaded
+--- just because MeatCode notified something — only probed the first time a
+--- caller actually asks for keyed/progress notifications.
+local fidget_notify, fidget_progress -- nil = unresolved, false = unavailable
+
+local function resolve_fidget_notify()
+  if fidget_notify == nil then
+    local ok, mod = pcall(require, "fidget")
+    fidget_notify = (ok and type(mod.notify) == "function") and mod.notify or false
+  end
+  return fidget_notify
+end
+
+local function resolve_fidget_progress()
+  if fidget_progress == nil then
+    local ok, mod = pcall(require, "fidget.progress")
+    fidget_progress = (ok and mod) or false
+  end
+  return fidget_progress
+end
+
+--- `opts.key` groups a sequence of related updates ("opening…" ->
+--- "preparing…" -> "ready") into one updating toast when fidget.nvim is
+--- installed and reachable; without it (or with some other notifier) this is
+--- a plain `vim.notify` and every call is its own message — entirely
+--- optional, MeatCode works identically either way.
+---@param msg string
+---@param level integer|nil
+---@param opts {key: string|nil}|nil
+function M.notify(msg, level, opts)
+  level = level or vim.log.levels.INFO
+  local key = opts and opts.key
+  if key then
+    local notify_fn = resolve_fidget_notify()
+    if notify_fn then
+      local ok = pcall(notify_fn, msg, level, { key = key, group = "meatcode", annote = "MeatCode" })
+      if ok then return end
+    end
+  end
+  vim.notify(msg, level, { title = "MeatCode" })
+end
+
+local progress_seq = 0
+
+--- A cancellable/finishable status indicator for one logical task ("opening
+--- Two Sum", "checking NeetCode for a stronger oracle"). Renders as a real
+--- spinner via fidget.nvim's progress handles when it is installed;
+--- otherwise degrades to a single notify that gets replaced in place on
+--- every `:report()` rather than stacking a toast per update.
+---@param message string initial status text
+---@return table handle with :report(message), :finish(message|nil), :cancel()
+function M.progress(message)
+  local mod = resolve_fidget_progress()
+  if mod then
+    local ok, handle = pcall(mod.handle.create, {
+      title = "MeatCode",
+      message = message,
+      lsp_client = { name = "MeatCode" },
+    })
+    if ok and handle then
+      return {
+        report = function(_, msg) pcall(handle.report, handle, { message = msg }) end,
+        finish = function(_, msg)
+          if msg then pcall(function() handle.message = msg end) end
+          pcall(handle.finish, handle)
+        end,
+        cancel = function(_) pcall(handle.cancel, handle) end,
+      }
+    end
+  end
+  progress_seq = progress_seq + 1
+  local key = "meatcode-progress-" .. progress_seq
+  M.notify(message, vim.log.levels.INFO, { key = key })
+  return {
+    report = function(_, msg) M.notify(msg, vim.log.levels.INFO, { key = key }) end,
+    finish = function(_, msg) if msg then M.notify(msg, vim.log.levels.INFO, { key = key }) end end,
+    cancel = function(_) end,
+  }
 end
 
 function M.err(msg)
