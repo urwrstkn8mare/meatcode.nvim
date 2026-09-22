@@ -1,8 +1,9 @@
 # Progress tracking
 
 Completions are not a local checkbox. They are read back out of your actual
-submission history on both providers, so problems you solved in a browser, or
-years ago, are already counted the first time you open the roadmap.
+submission history on LeetCode and NeetCode, plus every acceptance recorded by
+this plugin, so problems you solved in a browser, or years ago, are already
+counted the first time you open the homepage.
 
 ## How a completion is counted
 
@@ -11,18 +12,20 @@ submission for it, in the currently selected language, on that day. The number
 shown beside a problem is how many distinct days that happened — which is what
 you want when you are re-grinding the same list.
 
-LeetCode and NeetCode share one history, keyed by LeetCode slug. Ten accepts in
-one day across both providers is one day. Their day boundaries differ though:
+LeetCode and NeetCode share one history, keyed by canonical provider id
+(`leetcode:<slug>`, `neetcode:<id>`, `lintcode:<id>`). Ten accepts in
+one day across providers is one day. Their day boundaries differ though:
 LeetCode's is your local timezone, NeetCode's is UTC, so a submission near
 midnight can occasionally land on the adjacent day for one of them.
 
 History is stored in `stdpath("cache")/meatcode/progress.json`, keyed by
-language, then slug, then day, and stays readable offline.
+language, then canonical key, then day, and stays readable offline.
+LintCode submissions count when made through the plugin; its account
+history endpoint is not walked.
 
 ## When it checks
 
-Opening the roadmap or the LeetCode finder triggers a check for the selected
-language.
+Opening the homepage, roadmap, or finder triggers a check for the selected
 
 The **first** check for a language walks each provider's full history:
 LeetCode's account submission log, page by page, and NeetCode's daily activity

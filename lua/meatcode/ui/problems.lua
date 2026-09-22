@@ -4,6 +4,7 @@ local hl = require("meatcode.ui.highlight")
 local progress = require("meatcode.progress")
 local tabs = require("meatcode.ui.tab")
 local util = require("meatcode.util")
+local providers = require("meatcode.providers")
 
 --- Problem list for a single roadmap topic.
 local M = {}
@@ -46,7 +47,8 @@ local function render()
   for i, p in ipairs(problems) do
     local count = progress.completion_count(p)
     local mark = string.format("%2d", count)
-    local lock = p.pro and "  [pro]" or ""
+    local nc = p.providers and p.providers.neetcode
+    local lock = nc and nc.paid and "  [pro]" or ""
     local line = string.format("  %s  %-52s %-7s%s", mark, p.name, p.difficulty, lock)
     table.insert(lines, line)
 
@@ -59,7 +61,7 @@ local function render()
     if dcol then
       table.insert(spans, { row, dcol - 1, dcol - 1 + #p.difficulty, hl.difficulty(p.difficulty) })
     end
-    if p.pro then
+    if lock ~= "" then
       table.insert(spans, { row, #line - #lock, #line, "MeatCodeWarn" })
     end
     local _ = i
@@ -100,19 +102,16 @@ local function keymaps()
 
   map("o", function()
     local p = current()
-    if p and p.leetcode then
-      vim.ui.open("https://leetcode.com/problems/" .. p.leetcode .. "/")
-    end
-  end, "open on LeetCode")
-
-  map("v", function()
-    local p = current()
-    if p and p.video then
-      vim.ui.open("https://youtube.com/watch?v=" .. p.video)
-    else
-      util.notify("no video for this problem")
-    end
-  end, "open the NeetCode video")
+    local links = p and providers.links(p) or {}
+    if #links == 0 then return util.notify("no links for this problem") end
+    if #links == 1 then return vim.ui.open(links[1].url) end
+    vim.ui.select(links, {
+      prompt = "Open link:",
+      format_item = function(link) return link.label end,
+    }, function(choice)
+      if choice then vim.ui.open(choice.url) end
+    end)
+  end, "open a problem link")
 end
 
 

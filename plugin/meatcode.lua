@@ -4,6 +4,7 @@ end
 vim.g.loaded_meatcode = true
 
 local SUBCOMMANDS = {
+  home = function() require("meatcode").home() end,
   roadmap = function(args) require("meatcode").roadmap(args[1]) end,
   list = function(args) require("meatcode").list(table.concat(args, " ")) end,
   random = function() require("meatcode").random() end,
@@ -12,13 +13,12 @@ local SUBCOMMANDS = {
     require("meatcode").login(args[1], #args > 1 and table.concat(vim.list_slice(args, 2), " ") or nil)
   end,
   logout = function(args) require("meatcode").logout(args[1]) end,
-  status = function() require("meatcode").status() end,
   lang = function(args) require("meatcode").set_lang(args[1]) end,
 }
 
 vim.api.nvim_create_user_command("MeatCode", function(cmd)
   local args = cmd.fargs
-  local sub = table.remove(args, 1) or "roadmap"
+  local sub = table.remove(args, 1) or "home"
   local fn = SUBCOMMANDS[sub]
   if not fn then
     return vim.notify("unknown subcommand: " .. sub, vim.log.levels.ERROR, { title = "MeatCode" })
@@ -44,7 +44,7 @@ end, {
     elseif sub == "lang" then
       candidates = require("meatcode.lang").all()
     elseif sub == "login" or sub == "logout" then
-      candidates = { "leetcode", "neetcode" }
+      candidates = require("meatcode.providers").NAMES
     end
     return vim.tbl_filter(function(name)
       return name:find(lead, 1, true) == 1

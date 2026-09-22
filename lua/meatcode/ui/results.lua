@@ -101,118 +101,57 @@ function M.render_run(buf, result)
   hl.apply(buf, spans)
 end
 
---- Cloud submission verdict.
+--- Normalized cloud submission verdict from any provider adapter.
 function M.render_submit(buf, data)
   local lines, spans = {}, {}
   push(lines, spans, "")
 
-  local status = (data.status and data.status.description) or "Unknown"
-  local accepted = status == "Accepted"
-  local passed = data.correct_test_case_count or 0
-  local total = data.test_case_count or 0
-
+  local status = data.status or "Unknown"
+  local accepted = data.accepted == true
+  local passed = tonumber(data.passed) or 0
+  local total = tonumber(data.total) or 0
   push(lines, spans,
     string.format("  %s  %s — %d/%d test cases", accepted and "✓" or "✗", status, passed, total),
     accepted and "MeatCodePass" or "MeatCodeFail")
   push(lines, spans, "")
 
-  local dist = data.distribution or {}
-  local time_pct = dist.timeDistribution and dist.timeDistribution.percentile
-  local mem_pct = dist.memoryDistribution and dist.memoryDistribution.percentile
-
-  if data.time then
-    local ms = tonumber(data.time)
-    local runtime = ms and string.format("%.0f ms", ms * 1000) or (tostring(data.time) .. "s")
-    local beats = time_pct and string.format("  (Beats %.1f%%)", time_pct) or ""
-    push(lines, spans, string.format("      runtime   %s%s", runtime, beats), "MeatCodeMuted")
+  if data.runtime then
+    local beats = data.runtime_percentile
+      and string.format("  (Beats %.1f%%)", data.runtime_percentile) or ""
+    push(lines, spans, string.format("      runtime   %s%s", tostring(data.runtime), beats), "MeatCodeMuted")
   end
   if data.memory then
-    local kb = tonumber(data.memory)
-    local memory = kb and string.format("%.1f MB", kb / 1024) or tostring(data.memory)
-    local beats = mem_pct and string.format("  (Beats %.1f%%)", mem_pct) or ""
-    push(lines, spans, string.format("      memory    %s%s", memory, beats), "MeatCodeMuted")
+    local beats = data.memory_percentile
+      and string.format("  (Beats %.1f%%)", data.memory_percentile) or ""
+    push(lines, spans, string.format("      memory    %s%s", tostring(data.memory), beats), "MeatCodeMuted")
   end
 
-  if data.compile_output and data.compile_output ~= vim.NIL and data.compile_output ~= "" then
+  if data.compile_output and data.compile_output ~= "" then
     push(lines, spans, "")
     block(lines, spans, "compile", data.compile_output, "MeatCodeFail")
   end
-
-  local failing = data.last_executed_test_case
-  if not accepted and type(failing) == "table" then
+  if data.runtime_error and data.runtime_error ~= "" then
     push(lines, spans, "")
-    push(lines, spans, string.format("  First failing case (#%d)",
-      (failing.test_case_index or 0) + 1), "MeatCodeFail")
-    block(lines, spans, "input", failing.input, "MeatCodeMuted")
-    block(lines, spans, "expected", failing.expected_output, "MeatCodeMuted")
-    block(lines, spans, "actual", failing.user_output, "MeatCodeFail")
-    block(lines, spans, "logs", failing.user_logs, "MeatCodeMuted")
-    if type(failing.input) == "string" and vim.trim(failing.input) ~= "" then
+    block(lines, spans, "runtime", data.runtime_error, "MeatCodeFail")
+  end
+  if not accepted then
+    push(lines, spans, "")
+    block(lines, spans, "input", data.input, "MeatCodeMuted")
+    block(lines, spans, "expected", data.expected, "MeatCodeMuted")
+    block(lines, spans, "actual", data.actual, "MeatCodeFail")
+    block(lines, spans, "stdout", data.stdout, "MeatCodeMuted")
+    if type(data.failed_input) == "string" and vim.trim(data.failed_input) ~= "" then
       push(lines, spans, "  " .. config.options.keys.problem.test_failed
         .. " to add this input to local tests", "MeatCodeMuted")
     end
   end
 
-  if data.stderr and data.stderr ~= vim.NIL and data.stderr ~= "" then
-    push(lines, spans, "")
-    block(lines, spans, "stderr", data.stderr, "MeatCodeFail")
-  end
-
-  local streak = data.streakUpdate
+  local streak = data.streak
   if accepted and streak then
     push(lines, spans, "")
     push(lines, spans, string.format("  streak %d day%s (best %d)",
       streak.currentStreak or 0, (streak.currentStreak == 1) and "" or "s", streak.maxStreak or 0),
       "MeatCodeMuted")
-  end
-
-  vim.bo[buf].modifiable = true
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-  hl.apply(buf, spans)
-end
-
---- LeetCode's submission-check response uses a different shape from NeetCode.
-function M.render_leetcode_submit(buf, data)
-  local lines, spans = {}, {}
-  push(lines, spans, "")
-
-  local status = data.status_msg or "Unknown"
-  local accepted = data.status_code == 10 or status == "Accepted"
-  local passed = tonumber(data.total_correct) or 0
-  local total = tonumber(data.total_testcases) or 0
-  push(lines, spans,
-    string.format("  %s  %s — %d/%d test cases", accepted and "✓" or "✗", status, passed, total),
-    accepted and "MeatCodePass" or "MeatCodeFail")
-  push(lines, spans, "")
-
-  if data.status_runtime then
-    local beats = data.runtime_percentile
-      and string.format("  (Beats %.1f%%)", tonumber(data.runtime_percentile) or 0) or ""
-    push(lines, spans, string.format("      runtime   %s%s", data.status_runtime, beats), "MeatCodeMuted")
-  end
-  if data.status_memory then
-    local beats = data.memory_percentile
-      and string.format("  (Beats %.1f%%)", tonumber(data.memory_percentile) or 0) or ""
-    push(lines, spans, string.format("      memory    %s%s", data.status_memory, beats), "MeatCodeMuted")
-  end
-
-  local compile = data.full_compile_error or data.compile_error
-  local runtime = data.full_runtime_error or data.runtime_error
-  if compile and compile ~= "" then
-    push(lines, spans, "")
-    block(lines, spans, "compile", compile, "MeatCodeFail")
-  end
-  if runtime and runtime ~= "" then
-    push(lines, spans, "")
-    block(lines, spans, "runtime", runtime, "MeatCodeFail")
-  end
-  if not accepted then
-    push(lines, spans, "")
-    block(lines, spans, "input", data.last_testcase or data.input, "MeatCodeMuted")
-    block(lines, spans, "expected", data.expected_output, "MeatCodeMuted")
-    block(lines, spans, "actual", data.code_output, "MeatCodeFail")
-    block(lines, spans, "stdout", data.std_output, "MeatCodeMuted")
   end
 
   vim.bo[buf].modifiable = true

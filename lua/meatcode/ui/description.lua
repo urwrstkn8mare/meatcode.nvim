@@ -4,6 +4,8 @@
 --- blocks for topics/hints, `<code>` spans, `<br>` spacing, and LaTeX between
 --- dollar signs. We fold the accordions, conceal the markup and translate the
 --- maths into the characters a terminal can actually draw.
+local providers = require("meatcode.providers")
+
 local M = {}
 
 local NS = vim.api.nvim_create_namespace("meatcode_description")
@@ -389,14 +391,8 @@ function M.render(buf, problem, meta, sections, opts)
 
   -- Footer: where this problem lives, openable with the same key as a diagram.
   local footer = {}
-  if problem.id then
-    table.insert(footer, { "neetcode", "https://neetcode.io/problems/" .. problem.id })
-  end
-  if problem.leetcode then
-    table.insert(footer, { "leetcode", "https://leetcode.com/problems/" .. problem.leetcode .. "/" })
-  end
-  if problem.video then
-    table.insert(footer, { "video", "https://youtube.com/watch?v=" .. problem.video })
+  for _, link in ipairs(providers.links(problem)) do
+    table.insert(footer, { link.label:lower(), link.url })
   end
   if #footer > 0 then
     table.insert(lines, "")

@@ -1,12 +1,11 @@
-local nc_auth = require("meatcode.api.auth")
 local catalog = require("meatcode.catalog")
 local config = require("meatcode.config")
 local hl = require("meatcode.ui.highlight")
 local lang_info = require("meatcode.lang")
 local leetcode = require("meatcode.api.leetcode")
-local leetcode_auth = require("meatcode.api.leetcode_auth")
-local leetcode_catalog = require("meatcode.catalog.leetcode")
+local problem_catalog = require("meatcode.catalog.problems")
 local progress = require("meatcode.progress")
+local providers = require("meatcode.providers")
 local util = require("meatcode.util")
 
 local M = {}
@@ -35,6 +34,10 @@ local TOKEN_SNIPPET = [[
 
 ]]
 
+function M.home()
+  require("meatcode.ui.home").open()
+end
+
 function M.roadmap(list)
   if list and list ~= "" then
     if not vim.tbl_contains(catalog.LISTS, list) then
@@ -47,16 +50,16 @@ function M.roadmap(list)
 end
 
 function M.login(provider, credential)
-  if provider ~= "leetcode" and provider ~= "neetcode" then
-    return util.err("usage: :MeatCode login leetcode|neetcode")
+  local backend = providers.get(provider)
+  if not backend then
+    return util.err("usage: :MeatCode login " .. table.concat(providers.NAMES, "|"))
   end
 
   local function finish(value)
-    local login = provider == "leetcode" and leetcode_auth.login or nc_auth.login
-    login(value, function(err)
+    backend.auth.login(value, function(err)
       vim.schedule(function()
         if err then return util.err(provider .. " login failed: " .. err) end
-        util.notify("logged in to " .. (provider == "leetcode" and "LeetCode" or "NeetCode"))
+        util.notify("logged in to " .. backend.label)
         progress.sync(function() end)
       end)
     end)
@@ -64,39 +67,25 @@ function M.login(provider, credential)
 
   if credential and credential ~= "" then return finish(credential) end
   local login_ui = require("meatcode.ui.login")
-  if provider == "leetcode" then
-    return login_ui.open_leetcode(finish)
-  end
-  login_ui.open(TOKEN_SNIPPET, finish)
+  if provider == "neetcode" then return login_ui.open(TOKEN_SNIPPET, finish) end
+  local required = provider == "leetcode"
+    and "The cookie must contain both LEETCODE_SESSION and csrftoken."
+    or "Copy the complete header; LintCode may use more than one session cookie."
+  local host = provider == "leetcode" and "leetcode.com" or "www.lintcode.com"
+  login_ui.open_cookie(provider, backend.label, host, required, finish)
 end
 
 function M.logout(provider)
-  if provider == "leetcode" then
-    leetcode_auth.logout()
-  elseif provider == "neetcode" then
-    nc_auth.logout()
-  else
-    return util.err("usage: :MeatCode logout leetcode|neetcode")
+  local backend = providers.get(provider)
+  if not backend then
+    return util.err("usage: :MeatCode logout " .. table.concat(providers.NAMES, "|"))
   end
-  util.notify("logged out of " .. (provider == "leetcode" and "LeetCode" or "NeetCode"))
+  backend.auth.logout()
+  util.notify("logged out of " .. backend.label)
 end
 
 function M.status()
-  local cat = catalog.load()
-  local lc = leetcode_catalog.load()
-  local s = progress.summary(config.options.list)
-  print(table.concat({
-    "meatcode.nvim",
-    string.format("  NeetCode login %s", nc_auth.is_logged_in() and "yes" or "no"),
-    string.format("  LeetCode login %s", leetcode_auth.is_logged_in() and "yes" or "no"),
-    string.format("  list           %s", catalog.LIST_LABELS[config.options.list] or config.options.list),
-    string.format("  language       %s", lang_info.name(config.options.lang)),
-    string.format("  NeetCode       %d problems, %s (%s)",
-      cat and #cat.problems or 0, catalog.age_string(), cat and cat.source or "none"),
-    string.format("  LeetCode       %d problems", lc and #lc.problems or 0),
-    string.format("  roadmap solved %d/%d", s.done, s.total),
-    string.format("  solutions      %s", config.options.solutions_dir),
-  }, "\n"))
+  require("meatcode.ui.home").open()
 end
 
 function M.set_lang(name)
@@ -111,7 +100,7 @@ function M.set_lang(name)
 end
 
 function M.list(query)
-  require("meatcode.ui.leetcode").open(query)
+  require("meatcode.ui.list").open(query)
 end
 
 local function open_problem(problem)
@@ -122,23 +111,29 @@ end
 
 function M.random()
   catalog.load()
-  leetcode_catalog.refresh_mappings()
-  leetcode_catalog.ensure(function(err, cat)
+  problem_catalog.refresh_mappings()
+  problem_catalog.ensure(function(err, cat)
     if err and not cat then
-      return vim.schedule(function() util.err("could not load LeetCode problems: " .. err) end)
+      return vim.schedule(function() util.err("could not load problems: " .. err) end)
     end
-    local user = leetcode_auth.user()
-    local premium = user and user.isPremium == true
     local unsolved, all = {}, {}
     for _, problem in ipairs(cat.problems) do
-      if not problem.paid or premium or problem.id then
+      local accessible = false
+      for _, name in ipairs(providers.NAMES) do
+        local record = problem.providers[name]
+        if record and (not record.paid or providers.paid_unlocked(name)) then
+          accessible = true
+          break
+        end
+      end
+      if accessible then
         table.insert(all, problem)
         if not progress.is_solved(problem) then table.insert(unsolved, problem) end
       end
     end
     local choices = #unsolved > 0 and unsolved or all
     if #choices == 0 then
-      return vim.schedule(function() util.err("no accessible LeetCode problems found") end)
+      return vim.schedule(function() util.err("no accessible problems found") end)
     end
     open_problem(choices[math.random(#choices)])
   end)
@@ -146,23 +141,29 @@ end
 
 function M.daily()
   catalog.load()
-  leetcode_catalog.refresh_mappings()
+  problem_catalog.refresh_mappings()
   leetcode.daily(function(err, daily)
     if err or not daily or not daily.question then
       return vim.schedule(function()
         util.err("could not load LeetCode problem of the day: " .. tostring(err or "empty response"))
       end)
     end
-    leetcode_catalog.ensure(function(_, cat)
+    problem_catalog.ensure(function(_, cat)
       local q = daily.question
-      local problem = cat and cat.by_leetcode[q.titleSlug] or {
-        provider = "leetcode",
-        leetcode_id = tostring(q.questionId),
-        frontend_id = tostring(q.questionFrontendId),
+      local problem = cat and cat.by_provider.leetcode[q.titleSlug] or {
+        key = "leetcode:" .. q.titleSlug,
         name = q.title,
-        leetcode = q.titleSlug,
         difficulty = q.difficulty,
-        paid = q.isPaidOnly == true,
+        providers = {
+          leetcode = {
+            id = q.titleSlug,
+            question_id = tostring(q.questionId),
+            frontend_id = tostring(q.questionFrontendId),
+            paid = q.isPaidOnly == true,
+          },
+        },
+        topics = {},
+        companies = {},
       }
       open_problem(problem)
     end)

@@ -9,12 +9,12 @@ function M.request(opts, cb)
   local url = assert(opts.url, "url required")
   local timeout = opts.timeout or config.options.timeout
 
-  -- `-w` appends the status after the body so we can parse both from stdout
-  -- without needing a second stream or a temp file for headers.
+  -- `-w` appends transport metadata after the body so callers can inspect the
+  -- final URL after redirects without a second request.
   local cmd = {
     "curl", "-sS", "-L",
     "--max-time", tostring(timeout),
-    "-w", "\n%{http_code}",
+    "-w", "\n%{http_code}\n%{url_effective}",
     "-X", opts.method or "GET",
   }
 
@@ -44,12 +44,16 @@ function M.request(opts, cb)
     end
 
     local out = res.stdout or ""
-    local body, status = out:match("^(.*)\n(%d+)$")
+    local body, status, effective_url = out:match("^(.*)\n(%d+)\n([^\n]*)$")
     if not status then
       return cb("malformed curl response", nil)
     end
 
-    cb(nil, { status = tonumber(status), body = body })
+    cb(nil, {
+      status = tonumber(status),
+      body = body,
+      effective_url = effective_url ~= "" and effective_url or url,
+    })
   end)
 
   if not ok then

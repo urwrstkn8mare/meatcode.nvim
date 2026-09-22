@@ -4,8 +4,9 @@ LeetCode has no documented public API. Everything below is what the site's own
 web client does, recovered by watching it and reading
 `lua/meatcode/api/leetcode.lua` into shape. It can change without notice.
 
-The companion document is [neetcode.md](neetcode.md), which covers the other
-half: problem metadata, reference solutions, and the roadmap catalog.
+The companion documents are [neetcode.md](neetcode.md), which covers the other
+half: problem metadata, reference solutions, and the roadmap catalog, and
+[lintcode.md](lintcode.md), which covers LintCode.
 
 ## Transport
 

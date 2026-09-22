@@ -2,10 +2,9 @@ local catalog = require("meatcode.catalog")
 local config = require("meatcode.config")
 local lang_info = require("meatcode.lang")
 local leetcode_api = require("meatcode.api.leetcode")
-local leetcode_auth = require("meatcode.api.leetcode_auth")
-local leetcode_catalog = require("meatcode.catalog.leetcode")
+local problem_catalog = require("meatcode.catalog.problems")
 local nc_api = require("meatcode.api")
-local nc_auth = require("meatcode.api.auth")
+local providers = require("meatcode.providers")
 local util = require("meatcode.util")
 
 --- Completion history keyed by language, then LeetCode slug, then local calendar
@@ -30,6 +29,18 @@ local function load_cache()
   local cached = util.read_json(cache_path())
   state.completions = type(cached) == "table" and type(cached.completions) == "table"
     and cached.completions or {}
+  -- Pre-provider caches used bare LeetCode slugs. Migrate once to the canonical
+  -- provider-qualified key so LintCode-only and NeetCode-only problems count too.
+  for _, by_problem in pairs(state.completions) do
+    if type(by_problem) == "table" then
+      for key, days in pairs(vim.deepcopy(by_problem)) do
+        if type(key) == "string" and not key:find(":", 1, true) then
+          by_problem["leetcode:" .. key] = by_problem["leetcode:" .. key] or days
+          by_problem[key] = nil
+        end
+      end
+    end
+  end
   local cursors = type(cached) == "table" and cached.cursors or nil
   state.cursors = {
     leetcode = type(cursors) == "table" and type(cursors.leetcode) == "table" and cursors.leetcode or {},
@@ -62,14 +73,11 @@ end
 ---@param lang string|nil
 ---@return integer
 function M.completion_count(problem, lang)
-  if not problem.leetcode then
-    return 0
-  end
+  local key = providers.problem_key(problem)
+  if not key then return 0 end
   local days = load_cache()[lang or config.options.lang]
-  local completed = days and days[problem.leetcode] or nil
-  if type(completed) ~= "table" then
-    return 0
-  end
+  local completed = days and days[key] or nil
+  if type(completed) ~= "table" then return 0 end
   return vim.tbl_count(completed)
 end
 
@@ -121,25 +129,22 @@ end
 ---@param day string|nil
 ---@return boolean recorded Whether this was a new completion day.
 function M.record_acceptance(problem, lang, day)
-  if not problem.leetcode then
-    return false
-  end
+  local key = providers.problem_key(problem)
+  if not key then return false end
   local completions = load_cache()
   local by_language = completions[lang]
   if type(by_language) ~= "table" then
     by_language = {}
     completions[lang] = by_language
   end
-  local days = by_language[problem.leetcode]
+  local days = by_language[key]
   if type(days) ~= "table" then
     days = {}
-    by_language[problem.leetcode] = days
+    by_language[key] = days
   end
 
   day = day or os.date("%Y-%m-%d")
-  if days[day] then
-    return false
-  end
+  if days[day] then return false end
   days[day] = true
   persist()
   emit()
@@ -195,7 +200,7 @@ function M.sync_leetcode(lang, cb, on_progress)
         if sub.status_display == "Accepted" and sub.lang == remote_lang
           and type(sub.title_slug) == "string" and sub.title_slug ~= "" then
           local day = os.date("%Y-%m-%d", tonumber(sub.timestamp))
-          if M.record_acceptance({ leetcode = sub.title_slug }, lang, day) then
+          if M.record_acceptance({ providers = { leetcode = { id = sub.title_slug } } }, lang, day) then
             recorded = recorded + 1
           end
         end
@@ -261,9 +266,8 @@ function M.sync_neetcode(lang, cb, on_progress)
             checked = checked + 1
             if sub.status == "Accepted" and sub.language == lang
               and type(sub.problemId) == "string" then
-              local entry = cat and cat.by_id[sub.problemId]
-              if entry and entry.leetcode
-                and M.record_acceptance({ leetcode = entry.leetcode }, lang, date) then
+              local entry = cat and cat.by_provider.neetcode[sub.problemId]
+              if entry and M.record_acceptance(entry, lang, date) then
                 recorded = recorded + 1
               end
             end
@@ -307,8 +311,8 @@ function M.check_new(lang, cb)
   cb = cb or function() end
   lang = lang or config.options.lang
 
-  local run_leetcode = leetcode_auth.is_logged_in()
-  local run_neetcode = nc_auth.is_logged_in()
+  local run_leetcode = providers.get("leetcode").auth.is_logged_in()
+  local run_neetcode = providers.get("neetcode").auth.is_logged_in()
   if not run_leetcode and not run_neetcode then
     return cb(nil, { checked = 0, recorded = 0 })
   end
@@ -351,13 +355,12 @@ function M.check_new(lang, cb)
   end
 end
 
---- Refresh the LeetCode catalog and streak, and opportunistically pick up new
---- accepted submissions for the configured language. Completion counts are
---- local history and remain available offline.
+--- Refresh all provider catalogs and opportunistically pick up new accepted
+--- submissions for the configured language. Completion counts remain offline.
 function M.sync(cb)
   cb = cb or function() end
   load_cache()
-  leetcode_catalog.sync(function(err)
+  problem_catalog.sync(function(err)
     emit()
     cb(err)
   end)

@@ -1,9 +1,9 @@
 # meatcode.nvim
 
 (L/N)eetCode without leaving Neovim. Browse problems via NeetCode's roadmap or a
-fuzzy-searchable list of all LeetCode problems. Work on it locally, run/debug
-test cases locally, and submit to LeetCode (sometimes NeetCode if LeetCode
-submission locked).
+fuzzy-searchable merged list of LeetCode, NeetCode, and LintCode problems. Work
+on one locally, run/debug test cases locally, and submit to any of the three
+providers.
 
 ![NeetCode Roadmap](doc/screenshot.png)
 
@@ -67,23 +67,24 @@ account with whichever provider you submit to.
 | --- | --- |
 | `:MeatCode login leetcode` | the full `Cookie` request header from a signed-in `leetcode.com` tab (it must contain `LEETCODE_SESSION` and `csrftoken`) |
 | `:MeatCode login neetcode` | NeetCode's Firebase refresh token, out of browser storage |
+| `:MeatCode login lintcode` | the full `Cookie` request header from a signed-in `www.lintcode.com` tab |
 
-Both commands walk you through getting the value. Credentials are written with
+All three commands walk you through getting the value. Credentials are written with
 `0600` permissions under `stdpath("cache")/meatcode` and are only ever sent to
-the service they belong to. `:MeatCode logout leetcode` / `:MeatCode logout
-neetcode` deletes one, `:MeatCode status` shows where you stand.
+the service they belong to. `:MeatCode logout <provider>` deletes one; `:MeatCode`
+opens the homepage, which shows where you stand.
 
 ## Usage
 
 | Command | What it does |
 | --- | --- |
-| `:MeatCode` | Open the roadmap |
+| `:MeatCode` | Open the homepage: providers, workspace, progress, and jumps |
+| `:MeatCode home` | Same as above |
 | `:MeatCode roadmap [name]` | Open the roadmap on `blind75`, `neetcode150`, `neetcode250`, or `allNC` |
-| `:MeatCode list [query]` | Fuzzy-search every LeetCode problem |
+| `:MeatCode list [query]` | Fuzzy-search the merged LeetCode/NeetCode/LintCode catalog |
 | `:MeatCode random` | Open a random accessible problem you have not completed in the current language |
 | `:MeatCode daily` | Open LeetCode's problem of the day |
 | `:MeatCode lang [name]` | Show or change the solution language |
-| `:MeatCode status` | Show both provider states |
 | `:MeatCode login`/`logout [provider]` | See above |
 
 Anything you do to a problem is a buffer-local mapping rather than another Ex
@@ -94,13 +95,13 @@ cycle curated lists, `?` for help, `q` to close. The terminal cursor is hidden
 while the roadmap has focus since the highlighted node already shows where you
 are (`ui.hide_cursor = false` keeps it).
 
-**Problem list** — `<CR>` opens, `o` opens it on LeetCode, `v` plays the
-NeetCode video, `q` closes. The number beside a problem is how many days you
+**Problem list** — `<CR>` opens, `o` fuzzy-picks a provider/solution/video link,
+`q` closes. The number beside a problem is how many days you
 have completed it in the current language.
 
-**LeetCode finder** — a full-page Telescope picker with the problem count and
-your current streak. Type to filter by number, title, slug, or difficulty;
-`<CR>` opens, `<C-o>` opens it in a browser.
+**Problem finder** — a full-page Telescope picker with the merged problem count and
+your current LeetCode streak. Type to filter by number, title, slug, difficulty,
+topic, or company; `<CR>` opens, `<C-o>` fuzzy-picks a link.
 
 **Solving** — the problem opens in its own tab: statement on the left, your
 solution on the right, results underneath.
@@ -112,20 +113,20 @@ solution on the right, results underneath.
 | `<leader>nt` | Edit the local test cases |
 | `<leader>na` | Add the last failed submission input as a local case |
 | `<leader>nR` | Reset the solution to the starter code |
-| `<leader>nol` / `<leader>non` | Open the problem on LeetCode / NeetCode in the browser |
-| `<leader>nov` | Open the problem's NeetCode video in the browser |
-| `<leader>nd` | Switch the local description/test cases between LeetCode and NeetCode |
+| `<leader>no` | Fuzzy-pick a provider/solution/video link and open it in the browser |
+| `<leader>nd` | Cycle the statement, starter code, and judge through `provider_order` |
 | `<CR>` or `<Tab>` | In the statement: open the hint, link, or diagram under the cursor |
 | `q` | Close the problem |
 
 ## How it works
 
-**Two providers, one problem.** Statements, starter code and submissions come
-from LeetCode by default. If a problem is Premium and you are not, the matching
-NeetCode problem is used instead where one exists. `<leader>nd` switches an
-open problem's local description/test cases by hand; `<leader>nol` /
-`<leader>non` / `<leader>nov` open the problem (or its NeetCode video) in the
-browser without touching what's loaded locally.
+**Three providers, one problem.** Statements, starter code and submissions come
+from the first provider in `provider_order` that has the problem and can open it:
+paid-only problems fall through to the next provider unless that provider is
+unlocked (any login for NeetCode/LintCode, Premium for LeetCode). `<leader>nd`
+cycles an open problem through the chain by hand; the empty results panel always
+lists the current keys. `<leader>no` fuzzy-picks a link instead of opening a
+fixed page, so LintCode-only problems get browser links too.
 
 **Your solution is a real file on disk**, at
 `stdpath("data")/meatcode/solutions/<topic>/<problem>.<ext>`, so your LSP,
@@ -144,8 +145,7 @@ isn't, plus editing the case list, is in
 
 **Completions come from your actual submission history**, not a local
 checkbox. Accepted cloud submissions in the current language count once per
-problem per day, and LeetCode and NeetCode share one history, so submissions
-you made outside this plugin still count. Details in
+problem per day, and all three providers share one history, so submissions
 [doc/progress.md](doc/progress.md).
 
 **The catalog keeps itself current.** Nothing is bundled with the plugin; it is
@@ -158,11 +158,11 @@ never blocks on it, and completion history stays readable offline.
 - [Local test runs](doc/local-runs.md) — coverage, editing cases, crash output
 - [C++ and clangd](doc/cpp.md) — why a `.clangd` is generated and what's in it
 - [Progress tracking](doc/progress.md) — how completions and streaks are counted
-- [NeetCode's API](doc/api/neetcode.md) and [LeetCode's API](doc/api/leetcode.md) — what was reverse-engineered, and how it holds up
+- [NeetCode's API](doc/api/neetcode.md), [LeetCode's API](doc/api/leetcode.md), and [LintCode's API](doc/api/lintcode.md) — what was reverse-engineered, and how it holds up
 - `:help meatcode` — the same ground in Vim help form
 
 ## Caveats
 
-Both APIs used here are undocumented and can change without notice.
-meatcode.nvim is not affiliated with or endorsed by NeetCode or LeetCode.
+All three APIs used here are undocumented and can change without notice.
+meatcode.nvim is not affiliated with or endorsed by NeetCode, LeetCode, or LintCode.
 Submissions run on their infrastructure; be reasonable with them.

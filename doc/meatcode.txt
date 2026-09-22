@@ -14,9 +14,9 @@ CONTENTS                                                          *meatcode*
 ==============================================================================
 1. INTRODUCTION                                            *meatcode-intro*
 
-Browse the NeetCode roadmap and the complete LeetCode catalog, solve problems
-in real buffers, run matching NeetCode visible cases locally, and submit through
-LeetCode by default.
+Browse the NeetCode roadmap and the merged LeetCode/NeetCode/LintCode catalog,
+solve problems in real buffers, run matching NeetCode visible cases locally,
+and submit through the first provider in `provider_order` that can open them.
 
 Local runs work because NeetCode exposes its own reference solution for every
 problem. Your code and the reference are executed over the same inputs and the
@@ -50,32 +50,35 @@ csrftoken.
 Run `:MeatCode login neetcode` to see how to extract NeetCode's Firebase refresh
 token from browser storage.
 
-Both credentials are written below `stdpath("cache")/meatcode` with mode 0600.
-Use `:MeatCode logout leetcode` or `:MeatCode logout neetcode` to remove one.
+Run `:MeatCode login lintcode` to copy the complete Cookie request header from a
+signed-in www.lintcode.com tab.
+
+All credentials are written below `stdpath("cache")/meatcode` with mode 0600.
+Use `:MeatCode logout <provider>` to remove one.
 
 ==============================================================================
 4. COMMANDS                                             *meatcode-commands*
 
                                                                   *:MeatCode*
-:MeatCode               Open the current NeetCode roadmap.
+:MeatCode               Open the homepage: providers, workspace, progress, jumps.
+:MeatCode home          Same as above.
 :MeatCode roadmap [NAME]
                        Open the roadmap, optionally selecting blind75,
                        neetcode150, neetcode250, or allNC.
-:MeatCode list [QUERY]  Fuzzy-search every LeetCode problem in a full-page
+:MeatCode list [QUERY]  Fuzzy-search the merged catalog in a full-page
                        Telescope picker.
 :MeatCode random        Open a random accessible unsolved problem.
 :MeatCode daily         Open LeetCode's problem of the day.
 :MeatCode lang [NAME]   Show or change the solution language.
-:MeatCode status        Print both provider states.
-:MeatCode login NAME    Log in to `leetcode` or `neetcode`.
-:MeatCode logout NAME   Remove credentials for `leetcode` or `neetcode`.
+:MeatCode login NAME    Log in to `leetcode`, `neetcode`, or `lintcode`.
+:MeatCode logout NAME   Remove credentials for one provider.
 
 Problem actions use the buffer-local mappings below instead of duplicate Ex
 commands. Accepted cloud submissions are counted in the selected language; an
-accept on either provider counts once per calendar day, regardless of how many
+accept on any provider counts once per calendar day, regardless of how many
 submissions landed that day. The first check for a language walks each
-provider's full history automatically; after that, opening the roadmap or
-LeetCode finder cheaply checks for anything new via a stored cursor. Each
+provider's full history automatically; after that, opening the homepage,
+roadmap, or finder cheaply checks for anything new via a stored cursor. Each
 check notifies when it starts and when it finishes, even when nothing changed.
 
 ==============================================================================
@@ -91,25 +94,27 @@ Roadmap ~
 Problem list ~
   <CR>                  Open the problem
   0, 1, …              Completion days for the selected language
-  o                     Open on LeetCode
-  v                     Open the NeetCode video
+  o                     Fuzzy-pick a provider/solution/video link
   q                     Close
 
-LeetCode list ~
-  type                  Fuzzy-filter by number, title, slug, or difficulty
+Homepage ~
+  r / l / n / d         Open roadmap / finder / random / daily
+  <CR>                  Open the row under the cursor
+  q                     Close
+
+Problem finder ~
+  type                  Fuzzy-filter by number, title, slug, difficulty,
+                        topic, or company
   <CR>                  Open the problem
-  <C-o>                 Open in a browser
-  <Esc>                 Close
+  <C-o>                 Fuzzy-pick a provider/solution/video link
 
 Solving ~
   <leader>nr            Run visible cases locally when available
   <leader>ns            Submit through the active provider
   <leader>nR            Reset to the selected provider's starter code
-  <leader>nol           Open the problem on LeetCode in the browser
-  <leader>non           Open the problem on NeetCode in the browser
-  <leader>nov           Open the problem's NeetCode video in the browser
-  <leader>nd            Switch the local description/test cases between
-                        LeetCode and NeetCode
+  <leader>no            Fuzzy-pick a provider/solution/video link
+  <leader>nd            Cycle the statement, starter code, and judge
+                        through `provider_order`
   <CR> or <Tab>         Statement window: toggle the hint under the cursor, or
                         follow the link under it via |vim.ui.open()|.
   q                     Close the problem (statement/results windows)
@@ -165,6 +170,7 @@ Defaults: >lua
     {
       list = "neetcode150",
       lang = "python",
+      provider_order = { "leetcode", "neetcode", "lintcode" },
       solutions_dir = vim.fn.stdpath("data") .. "/meatcode/solutions",
       cache_dir = vim.fn.stdpath("cache") .. "/meatcode",
       catalog_max_age = 24 * 60 * 60,
@@ -186,12 +192,12 @@ Defaults: >lua
       },
       keys = {
         roadmap = { open = "<CR>", quit = "q", cycle_list = "L" },
+        home = { roadmap = "r", list = "l", random = "n", daily = "d" },
         problem = {
           run = "<leader>nr", submit = "<leader>ns",
           tests = "<leader>nt", test_failed = "<leader>na",
           reset = "<leader>nR",
-          open_leetcode = "<leader>nol", open_neetcode = "<leader>non",
-          open_video = "<leader>nov", switch_provider = "<leader>nd",
+          links = "<leader>no", switch_provider = "<leader>nd",
           quit = "q",
         },
       },

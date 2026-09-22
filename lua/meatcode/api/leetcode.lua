@@ -217,6 +217,11 @@ function M.problem(slug, cb)
       end
     end
 
+    local topics = {}
+    for _, tag in ipairs(type(q.topicTags) == "table" and q.topicTags or {}) do
+      if type(tag.name) == "string" and tag.name ~= "" then table.insert(topics, tag.name) end
+    end
+
     cb(nil, {
       provider = "leetcode",
       question_id = tostring(q.questionId),
@@ -229,7 +234,7 @@ function M.problem(slug, cb)
       availableLanguages = available,
       custom_test_cases = type(q.exampleTestcaseList) == "table" and q.exampleTestcaseList or {},
       hints = type(q.hints) == "table" and q.hints or {},
-      topic_tags = type(q.topicTags) == "table" and q.topicTags or {},
+      topics = topics,
       meta_data = type(q.metaData) == "string" and q.metaData or nil,
     })
   end)

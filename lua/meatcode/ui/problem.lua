@@ -1,6 +1,5 @@
-local api = require("meatcode.api")
-local leetcode = require("meatcode.api.leetcode")
-local leetcode_auth = require("meatcode.api.leetcode_auth")
+local providers = require("meatcode.providers")
+local problem_catalog = require("meatcode.catalog.problems")
 local config = require("meatcode.config")
 local description = require("meatcode.ui.description")
 local hl = require("meatcode.ui.highlight")
@@ -66,60 +65,79 @@ local function focus_session(s)
 end
 
 local function session_key(problem)
-  return problem.leetcode or problem.id
+  return providers.problem_key(problem)
 end
 
 local function meta_cache_path(provider, id)
-  local name = provider == "leetcode" and ("leetcode-" .. id) or id
-  return string.format("%s/meta/%s.json", config.options.cache_dir, name)
+  return string.format("%s/meta/%s-%s.json", config.options.cache_dir, provider, id)
 end
 
-local function fetch_neetcode_meta(id, cb)
-  local path = meta_cache_path("neetcode", id)
-  local cached = util.read_json(path)
-  if cached then return cb(nil, cached) end
-  api.problem(id, function(err, meta)
-    if err then return cb(err, nil) end
-    util.write_json(path, meta)
-    cb(nil, meta)
+local function union(left, right)
+  local out, seen = {}, {}
+  for _, list in ipairs({ left or {}, right or {} }) do
+    for _, value in ipairs(list) do
+      local name = type(value) == "table" and value.name or value
+      if type(name) == "string" and name ~= "" and not seen[name:lower()] then
+        seen[name:lower()] = true
+        table.insert(out, name)
+      end
+    end
+  end
+  table.sort(out, function(a, b) return a:lower() < b:lower() end)
+  return out
+end
+
+local function attach_problem_metadata(problem, meta)
+  problem.topics = union(problem.topics, meta.topics)
+  problem.companies = union(problem.companies, meta.companies)
+end
+
+local function fetch_provider_meta(problem, provider_name, lang, cb)
+  providers.ensure_id(problem, provider_name, function(resolve_err, id)
+    if resolve_err then return cb(resolve_err, nil) end
+    if not id then return cb("problem is unavailable on " .. providers.get(provider_name).label, nil) end
+    if provider_name == "lintcode" then
+      local leetcode_id = providers.id(problem, "leetcode")
+      if leetcode_id then problem_catalog.remember_lintcode(leetcode_id, id) end
+    end
+
+    local path = meta_cache_path(provider_name, id)
+    local cached = util.read_json(path)
+    if cached then
+      attach_problem_metadata(problem, cached)
+      return cb(nil, cached)
+    end
+    providers.get(provider_name).fetch(problem, lang, function(err, meta)
+      if err then return cb(err, nil) end
+      util.write_json(path, meta)
+      attach_problem_metadata(problem, meta)
+      cb(nil, meta)
+    end)
   end)
 end
 
---- Fetch from the selected provider. LeetCode is the default statement and
---- starter source; matching NeetCode metadata is attached only as a local-test
---- oracle, never used for submission.
-local function fetch_meta(problem, provider, cb)
-  if provider == "neetcode" then
-    return fetch_neetcode_meta(problem.id, cb)
-  end
-
-  local path = meta_cache_path("leetcode", problem.leetcode)
-  local function attach(meta)
-    if not problem.id then return cb(nil, meta) end
-    fetch_neetcode_meta(problem.id, function(_, nc)
+--- NeetCode's reference implementation remains the local-test oracle even
+--- when another provider supplies the visible cases and statement.
+local function fetch_meta(problem, provider_name, lang, cb)
+  fetch_provider_meta(problem, provider_name, lang, function(err, meta)
+    if err or provider_name == "neetcode" or not providers.available(problem, "neetcode") then
+      return cb(err, meta)
+    end
+    fetch_provider_meta(problem, "neetcode", lang, function(_, nc)
       if nc then
         meta.referenceSolution = nc.referenceSolution
-        meta.test_case_count = nc.test_case_count
-        meta.custom_test_cases = nc.custom_test_cases
+        meta.test_case_count = meta.test_case_count or nc.test_case_count
       end
       cb(nil, meta)
     end)
-  end
-
-  local cached = util.read_json(path)
-  if cached then return attach(cached) end
-  leetcode.problem(problem.leetcode, function(err, meta)
-    if err then return cb(err, nil) end
-    util.write_json(path, meta)
-    attach(meta)
   end)
 end
 
 local function solution_path(problem, lang)
-  local group = problem.pattern and util.slug(problem.pattern) or "leetcode"
-  local id = problem.leetcode or problem.id
+  local group = problem.pattern and util.slug(problem.pattern) or "problems"
+  local id = assert(providers.filename(problem), "problem has no provider identifier")
   return string.format("%s/%s/%s.%s",
-    config.options.solutions_dir, group, id, lang_info.ext(lang))
+    config.options.solutions_dir, group, util.slug(id), lang_info.ext(lang))
 end
 
 --- Extra test cases the user has written, stored alongside the solution.
@@ -130,16 +148,44 @@ end
 
 local function render_ready(s)
   local keys = config.options.keys.problem
-  local submit_provider = s.provider == "leetcode" and "LeetCode" or "NeetCode"
-  local local_note = s.problem.id
+  local backend = providers.get(s.provider)
+  local local_note = providers.available(s.problem, "neetcode") and s.meta.referenceSolution
     and "Local runs diff your output against NeetCode's reference solution."
-    or "This LeetCode-only problem has no local oracle; submit to run it."
-  vim.bo[s.res_buf].modifiable = true
-  vim.api.nvim_buf_set_lines(s.res_buf, 0, -1, false, {
-    "",
-    string.format("  %s  run local tests      %s  submit to %s", keys.run, keys.submit, submit_provider),
-    string.format("  %s  edit test cases      %s  add failed submission case", keys.tests, keys.test_failed),
-    string.format("  %s  use LeetCode         %s  use NeetCode", keys.open_leetcode, keys.open_neetcode),
+    or "No local oracle is available; submit to run the hidden suite."
+  local entries = {
+    { keys.run, "run local tests" },
+    { keys.submit, "submit to " .. backend.label },
+    { keys.tests, "edit test cases" },
+    { keys.test_failed, "add failed submission case" },
+    { keys.reset, "reset to starter code" },
+    { keys.links, "open a problem link" },
+    { keys.switch_provider, "switch provider" },
+  }
+  local key_width, label_width = 0, 0
+  for _, entry in ipairs(entries) do
+    key_width = math.max(key_width, vim.fn.strdisplaywidth(entry[1]))
+    label_width = math.max(label_width, vim.fn.strdisplaywidth(entry[2]))
+  end
+  local lines = { "" }
+  local spans = {}
+  local columns = 2
+  for i = 1, #entries, columns do
+    local cells = {}
+    for j = 0, columns - 1 do
+      local entry = entries[i + j]
+      if entry then table.insert(cells, { entry[1], entry[2] }) end
+    end
+    local line, key_spans = "  ", {}
+    for c, cell in ipairs(cells) do
+      local start = #line
+      line = line .. util.pad(cell[1], key_width) .. "  " .. util.pad(cell[2], label_width)
+      table.insert(key_spans, { #lines, start, start + #cell[1], "MeatCodeKey" })
+      if c < #cells then line = line .. "      " end
+    end
+    table.insert(lines, line)
+    vim.list_extend(spans, key_spans)
+  end
+  vim.list_extend(lines, {
     "",
     string.format("  %d visible test case(s) · %d hidden",
       #test_cases(s), s.meta.test_case_count or 0),
@@ -149,16 +195,12 @@ local function render_ready(s)
     "",
     "  <CR> in the statement opens a hint or diagram.",
   })
+  local muted = { #lines - 6, #lines - 4, #lines - 3, #lines - 1 }
+  for _, row in ipairs(muted) do table.insert(spans, { row, 0, #lines[row + 1], "MeatCodeMuted" }) end
+  vim.bo[s.res_buf].modifiable = true
+  vim.api.nvim_buf_set_lines(s.res_buf, 0, -1, false, lines)
   vim.bo[s.res_buf].modifiable = false
-  hl.apply(s.res_buf, {
-    { 1, 0, 100, "MeatCodeKey" },
-    { 2, 0, 100, "MeatCodeKey" },
-    { 3, 0, 100, "MeatCodeKey" },
-    { 5, 0, 80, "MeatCodeMuted" },
-    { 7, 0, 100, "MeatCodeMuted" },
-    { 8, 0, 80, "MeatCodeMuted" },
-    { 10, 0, 80, "MeatCodeMuted" },
-  })
+  hl.apply(s.res_buf, spans)
 end
 
 local function current_code(s)
@@ -326,8 +368,9 @@ function M.run()
   if s.busy then
     return util.notify("already running")
   end
-  if not s.problem.id or not s.meta.referenceSolution then
-    return util.err("local tests need a matching NeetCode problem — submit this problem to LeetCode instead")
+  local neetcode_id = providers.id(s.problem, "neetcode")
+  if not neetcode_id or not s.meta.referenceSolution then
+    return util.err("local tests need a matching NeetCode problem — submit this problem instead")
   end
   save(s)
 
@@ -335,7 +378,7 @@ function M.run()
   s.busy = true
   results.running(s.res_buf, "Running " .. #cases .. " local test case" .. (#cases == 1 and "" or "s"))
 
-  runner.run(s.problem.id, current_code(s), s.lang, s.meta, cases, function(result)
+  runner.run(neetcode_id, current_code(s), s.lang, s.meta, cases, function(result)
     s.busy = false
     vim.schedule(function()
       if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
@@ -350,7 +393,7 @@ local function accepted(s)
   util.notify(s.problem.name .. " accepted" .. (recorded and " · completion recorded" or " · already counted today"))
   pcall(render_description, s)
   pcall(function() require("meatcode.ui.roadmap").refresh() end)
-  pcall(function() require("meatcode.ui.leetcode").refresh() end)
+  pcall(function() require("meatcode.ui.list").refresh() end)
 end
 
 function M.submit()
@@ -359,11 +402,11 @@ function M.submit()
   if s.busy then return util.notify("already running") end
   save(s)
 
+  local backend = providers.get(s.provider)
   s.busy = true
-  local provider_name = s.provider == "leetcode" and "LeetCode" or "NeetCode"
-  results.running(s.res_buf, "Submitting to " .. provider_name)
+  results.running(s.res_buf, "Submitting to " .. backend.label)
 
-  local function done(err, data)
+  backend.submit(s.problem, s.meta, current_code(s), s.lang, function(err, data)
     s.busy = false
     vim.schedule(function()
       if not (s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf)) then return end
@@ -372,31 +415,13 @@ function M.submit()
           ok = false, error = err, cases = {}, passed = 0, total = 0,
         })
       end
-
-      if s.provider == "leetcode" then
-        s.failed_input = data.status_code == 10 and nil or data.last_testcase or data.input
-        results.render_leetcode_submit(s.res_buf, data)
-        if data.status_code == 10 or data.status_msg == "Accepted" then accepted(s) end
-        return
-      end
-
-      local failing = data.last_executed_test_case
-      s.failed_input = nil
-      if (not data.status or data.status.description ~= "Accepted")
-        and type(failing) == "table" and type(failing.input) == "string"
-        and vim.trim(failing.input) ~= "" then
-        s.failed_input = failing.input
-      end
-      results.render_submit(s.res_buf, data)
-      if data.status and data.status.description == "Accepted" then accepted(s) end
+      local submission = backend.normalize_submission(data)
+      s.failed_input = type(submission.failed_input) == "string"
+        and vim.trim(submission.failed_input) ~= "" and submission.failed_input or nil
+      results.render_submit(s.res_buf, submission)
+      if submission.accepted then accepted(s) end
     end)
-  end
-
-  if s.provider == "leetcode" then
-    return leetcode.submit(s.problem.leetcode, s.meta.question_id,
-      current_code(s), s.lang, done)
-  end
-  api.submit(s.problem.id, current_code(s), s.lang, done)
+  end)
 end
 
 
@@ -436,48 +461,41 @@ function M.reset()
   local starter = (s.meta.starterCode or {})[s.lang] or ""
   local local_err = reset_local(s, starter)
   if local_err then return util.err(local_err) end
-
   s.failed_input = nil
-  if s.provider == "leetcode" then
+
+  local backend = providers.get(s.provider)
+  if not backend.save_code then
     render_ready(s)
     return util.notify(s.problem.name .. " reset locally; completion count is unchanged")
   end
 
   s.busy = true
   results.running(s.res_buf, "Resetting " .. s.problem.name)
-  local pending, errors = 1, {}
-  local function done(label, err)
-    if err then table.insert(errors, label .. ": " .. err) end
-    pending = pending - 1
-    if pending > 0 then return end
+  backend.save_code(s.problem, s.lang, starter, function(err)
     vim.schedule(function()
       s.busy = false
       if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then render_ready(s) end
       pcall(render_description, s)
       pcall(function() require("meatcode.ui.roadmap").refresh() end)
-      if #errors > 0 then
-        return util.err("reset locally, but " .. table.concat(errors, "; "))
-      end
+      if err then return util.err("reset locally, but could not sync starter code: " .. err) end
       util.notify(s.problem.name .. " reset to starter code")
     end)
-  end
-  api.save_user_code(s.problem.id, s.lang, starter,
-    function(err) done("could not sync starter code", err) end)
+  end)
 end
 
---- Push the current buffer up to neetcode.io so the web editor matches.
+--- Push the current buffer to the selected provider when it exposes saved code.
 function M.push()
   local s = current_session()
-  if not s then
-    return util.err("no problem is open — use :MeatCode to pick one")
-  end
+  if not s then return util.err("no problem is open — use :MeatCode to pick one") end
+  local backend = providers.get(s.provider)
+  if not backend.save_code then return util.err(backend.label .. " does not expose saved editor code") end
   save(s)
-  api.save_user_code(s.problem.id, s.lang, current_code(s), function(err)
+  backend.save_code(s.problem, s.lang, current_code(s), function(err)
     vim.schedule(function()
       if err then
         util.err("could not sync code: " .. err)
       else
-        util.notify("code pushed to neetcode.io")
+        util.notify("code pushed to " .. backend.label)
       end
     end)
   end)
@@ -636,58 +654,46 @@ local function activate(s)
   pcall(vim.api.nvim_win_set_cursor, s.desc_win, { row + 1, 0 })
 end
 
---- Switch the local description/test cases to another provider's version of
---- the problem, re-fetching and reseeding the buffer.
+--- Reopen with a specific provider. The on-disk solution is shared and is not
+--- replaced merely because the statement source changed.
 function M.switch(provider)
   local s = ready()
   if not s then return end
-  if provider == "neetcode" and not s.problem.id then
-    return util.err("this problem does not exist on NeetCode")
-  end
-  if provider == "leetcode" and not s.problem.leetcode then
-    return util.err("this problem does not exist on LeetCode")
-  end
   local problem, lang = s.problem, s.lang
   M.close(s)
   vim.schedule(function() M.open(problem, { provider = provider, lang = lang }) end)
 end
 
---- Toggle the open problem between the LeetCode and NeetCode local
---- description/test cases.
 function M.toggle_provider()
   local s = ready()
   if not s then return end
-  M.switch(s.provider == "leetcode" and "neetcode" or "leetcode")
+  local order = providers.order()
+  local current = 0
+  for i, name in ipairs(order) do
+    if name == s.provider then current = i end
+  end
+  for offset = 1, #order do
+    local name = order[((current + offset - 1) % #order) + 1]
+    if providers.available(s.problem, name)
+      or (name == "lintcode" and providers.available(s.problem, "leetcode")) then
+      return M.switch(name)
+    end
+  end
+  util.err("this problem has no other provider")
 end
 
---- Open the LeetCode page for this problem in the browser.
-function M.open_leetcode_browser()
+function M.links()
   local s = ready()
   if not s then return end
-  if not s.problem.leetcode then
-    return util.err("this problem does not exist on LeetCode")
-  end
-  vim.ui.open("https://leetcode.com/problems/" .. s.problem.leetcode .. "/")
-end
-
---- Open the NeetCode page for this problem in the browser.
-function M.open_neetcode_browser()
-  local s = ready()
-  if not s then return end
-  if not s.problem.id then
-    return util.err("this problem does not exist on NeetCode")
-  end
-  vim.ui.open("https://neetcode.io/problems/" .. s.problem.id)
-end
-
---- Open this problem's NeetCode video in the browser.
-function M.open_video()
-  local s = ready()
-  if not s then return end
-  if not s.problem.video then
-    return util.err("this problem has no NeetCode video")
-  end
-  vim.ui.open("https://youtube.com/watch?v=" .. s.problem.video)
+  local links = providers.links(s.problem)
+  if #links == 0 then return util.err("this problem has no links") end
+  if #links == 1 then return vim.ui.open(links[1].url) end
+  vim.ui.select(links, {
+    prompt = "Open link:",
+    format_item = function(link) return link.label end,
+  }, function(choice)
+    if choice then vim.ui.open(choice.url) end
+  end)
 end
 
 local function keymaps(s)
@@ -697,14 +703,12 @@ local function keymaps(s)
       vim.keymap.set("n", lhs, fn, { buffer = buf, silent = true, desc = desc })
     end
     map(keys.run, M.run, "MeatCode: run local tests")
-    map(keys.submit, M.submit, "MeatCode: submit to NeetCode")
+    map(keys.submit, M.submit, "MeatCode: submit to selected provider")
     map(keys.tests, M.tests, "MeatCode: edit test cases")
     map(keys.test_failed, M.test_failed, "MeatCode: add failed submission case")
     map(keys.reset, M.reset, "MeatCode: reset to starter code")
-    map(keys.open_leetcode, M.open_leetcode_browser, "MeatCode: open on LeetCode")
-    map(keys.open_neetcode, M.open_neetcode_browser, "MeatCode: open on NeetCode")
-    map(keys.open_video, M.open_video, "MeatCode: open NeetCode video")
-    map(keys.switch_provider, M.toggle_provider, "MeatCode: switch LeetCode/NeetCode description")
+    map(keys.links, M.links, "MeatCode: open a problem link")
+    map(keys.switch_provider, M.toggle_provider, "MeatCode: switch problem provider")
     -- A problem tab is one unit: closing a split closes the tab.
     map("<C-w>c", function() M.close(s) end, "MeatCode: close problem")
     map("<C-w>q", function() M.close(s) end, "MeatCode: close problem")
@@ -933,19 +937,19 @@ local function ensure_clangd(problem_id, starter)
   rebuild_clangd(existing)
 end
 
---- Seed from NeetCode's saved editor only when NeetCode is the selected
---- provider. Both providers otherwise share the same on-disk solution file.
+--- Seed from a provider's saved editor only when that capability exists. Every
+--- provider shares the same on-disk solution, and an existing file always wins.
 local function seed_file(s, path, cb)
   local starter = (s.meta.starterCode or {})[s.lang] or ""
-  if s.lang == "cpp" then
-    ensure_clangd(s.problem.leetcode or s.problem.id, starter)
-  end
+  if s.lang == "cpp" then ensure_clangd(util.slug(providers.filename(s.problem)), starter) end
   if vim.uv.fs_stat(path) then return cb() end
-  if s.provider ~= "neetcode" then
+
+  local backend = providers.get(s.provider)
+  if not backend.saved_code then
     util.write_file(path, starter)
     return vim.schedule(cb)
   end
-  api.user_code(s.problem.id, function(err, data)
+  backend.saved_code(s.problem, s.lang, function(err, data)
     local code
     if not err and type(data) == "table" then
       local code_tabs = data.tabs or (data.code and { { code = data.code } })
@@ -1005,9 +1009,16 @@ local function build_windows(s)
   ensure_watchers()
 end
 
-local function is_leetcode_pro()
-  local user = leetcode_auth.user()
-  return user and user.isPremium == true
+local function initial_candidates(problem, forced)
+  if forced then return { forced } end
+  local out = {}
+  for _, name in ipairs(providers.order()) do
+    if providers.available(problem, name)
+      or (name == "lintcode" and providers.available(problem, "leetcode")) then
+      table.insert(out, name)
+    end
+  end
+  return out
 end
 
 ---@param problem table catalog entry
@@ -1023,78 +1034,82 @@ function M.open(problem, opts)
   end
   if opening[key] then return end
 
-  local forced = opts.provider ~= nil
-  local provider = opts.provider or (problem.leetcode and "leetcode" or "neetcode")
-  if provider == "leetcode" and not problem.leetcode then
-    return util.err("this problem does not exist on LeetCode")
-  end
-  if provider == "neetcode" and not problem.id then
-    return util.err("this problem does not exist on NeetCode")
-  end
+  local forced = opts.provider
+  local candidates = initial_candidates(problem, forced)
+  if #candidates == 0 then return util.err("problem has no supported provider") end
 
   local lang = opts.lang or config.options.lang
+  local candidate_index, provider = 0, nil
   opening[key] = true
-  util.notify("loading " .. problem.name .. " from " ..
-    (provider == "leetcode" and "LeetCode" or "NeetCode") .. "…")
 
-  local function finish(err, meta)
-    if err then
-      opening[key] = nil
-      return vim.schedule(function() util.err("could not load problem: " .. err) end)
-    end
-
-    if provider == "leetcode" and meta.paid_only and not is_leetcode_pro() then
-      if not forced and problem.id then
-        provider = "neetcode"
-        return fetch_meta(problem, provider, finish)
-      end
+  local function start_next(last_error)
+    candidate_index = candidate_index + 1
+    provider = candidates[candidate_index]
+    if not provider then
       opening[key] = nil
       return vim.schedule(function()
-        util.err(problem.name .. " requires LeetCode Premium and has no usable NeetCode fallback")
+        util.err("could not load problem: " .. tostring(last_error or "no provider succeeded"))
       end)
     end
-
-    vim.schedule(function()
-      if session_alive(sessions[key]) then
-        opening[key] = nil
-        focus_session(sessions[key])
-        return
+    util.notify("loading " .. problem.name .. " from " .. providers.get(provider).label .. "…")
+    fetch_meta(problem, provider, lang, function(err, meta)
+      if err then
+        if forced then
+          opening[key] = nil
+          return vim.schedule(function() util.err("could not load problem: " .. err) end)
+        end
+        return start_next(err)
       end
-      local available = meta.availableLanguages or {}
-      if #available > 0 and not vim.tbl_contains(available, lang) then
-        util.notify(string.format("%s is unavailable; falling back to %s",
-          lang_info.name(lang), lang_info.name(available[1])))
-        lang = available[1]
+      if meta.paid_only and not providers.paid_unlocked(provider) then
+        local label = providers.get(provider).label
+        if forced then
+          opening[key] = nil
+          return vim.schedule(function() util.err(problem.name .. " is paid-only on " .. label) end)
+        end
+        return start_next("paid-only on " .. label)
       end
 
-      local selected = vim.deepcopy(problem)
-      selected.provider = provider
-      local s = {
-        problem = selected,
-        provider = provider,
-        meta = meta,
-        sections = description.sections(meta.description),
-        lang = lang,
-        path = solution_path(selected, lang),
-        busy = false,
-        drawn = {},
-      }
-      util.mkdirp(vim.fs.dirname(s.path))
-      seed_file(s, s.path, function()
+      vim.schedule(function()
         if session_alive(sessions[key]) then
           opening[key] = nil
           focus_session(sessions[key])
           return
         end
-        build_windows(s)
-        opening[key] = nil
-        render_description(s)
-        keymaps(s)
-        render_ready(s)
+        local available = meta.availableLanguages or {}
+        if #available > 0 and not vim.tbl_contains(available, lang) then
+          util.notify(string.format("%s is unavailable; falling back to %s",
+            lang_info.name(lang), lang_info.name(available[1])))
+          lang = available[1]
+        end
+
+        local selected = vim.deepcopy(problem)
+        local s = {
+          problem = selected,
+          provider = provider,
+          meta = meta,
+          sections = description.sections(meta.description),
+          lang = lang,
+          path = solution_path(selected, lang),
+          busy = false,
+          drawn = {},
+        }
+        util.mkdirp(vim.fs.dirname(s.path))
+        seed_file(s, s.path, function()
+          if session_alive(sessions[key]) then
+            opening[key] = nil
+            focus_session(sessions[key])
+            return
+          end
+          build_windows(s)
+          opening[key] = nil
+          render_description(s)
+          keymaps(s)
+          render_ready(s)
+        end)
       end)
     end)
   end
 
-  fetch_meta(problem, provider, finish)
+  start_next()
 end
 return M

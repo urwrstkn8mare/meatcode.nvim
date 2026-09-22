@@ -5,8 +5,9 @@ the site's Angular bundle and probing endpoints. It can change without notice â€
 `lua/meatcode/catalog/scraper.lua` is written to fail loudly and keep the last
 good cache rather than silently serve wrong data.
 
-The companion document is [leetcode.md](leetcode.md), which covers statements,
-starter code, submissions and history on the LeetCode side.
+The companion documents are [leetcode.md](leetcode.md), which covers statements,
+starter code, submissions and history on the LeetCode side, and
+[lintcode.md](lintcode.md), which covers the LintCode side.
 
 ## Transport
 

@@ -50,18 +50,18 @@ function M.open(snippet, finish)
   end, { buffer = buf, desc = "Enter login token" })
 end
 
-function M.open_leetcode(finish)
+function M.open_cookie(provider, label, host, required, finish)
   local buf = vim.api.nvim_create_buf(false, true)
   local lines = {
-    "LeetCode login", "",
-    "1. Open https://leetcode.com and sign in.",
+    label .. " login", "",
+    "1. Open https://" .. host .. " and sign in.",
     "2. Open browser DevTools > Network, then reload the page.",
-    "3. Select a request to leetcode.com.",
+    "3. Select a request to " .. host .. ".",
     "4. Under Request Headers, copy the complete Cookie header value.",
     "5. Return here and press p to paste it.", "",
-    "The cookie must contain both LEETCODE_SESSION and csrftoken.", "",
-    "p: enter cookie   q: close",
   }
+  if required then table.insert(lines, required) end
+  vim.list_extend(lines, { "", "p: enter cookie   q: close" })
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
   vim.bo[buf].bufhidden = "wipe"
@@ -78,13 +78,13 @@ function M.open_leetcode(finish)
   end
   vim.keymap.set("n", "q", close, { buffer = buf })
   vim.keymap.set("n", "p", function()
-    vim.ui.input({ prompt = "LeetCode Cookie header: " }, function(input)
+    vim.ui.input({ prompt = label .. " Cookie header: " }, function(input)
       if input and vim.trim(input) ~= "" then
         close()
         finish(vim.trim(input))
       end
     end)
-  end, { buffer = buf, desc = "Enter LeetCode cookie" })
+  end, { buffer = buf, desc = "Enter " .. provider .. " cookie" })
 end
 
 return M
