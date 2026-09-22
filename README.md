@@ -1,12 +1,11 @@
 # meatcode.nvim
 
-Competitive practice without leaving Neovim. Browse NeetCode's roadmap or a
-merged catalog of LeetCode, NeetCode and LintCode, solve locally, submit to any
-of the three.
+LeetCode/NeetCode/LintCode without leaving Neovim. Browse NeetCode's roadmap or
+a merged catalog, solve locally, submit to any of the three.
 
 ![The meatcode.nvim homepage](doc/screenshot.png)
 
-## What it does differently
+## Features
 
 - **Local test runs, no network, no rate limit.** `<leader>nr` runs your code
   and NeetCode's reference solution over the same inputs on your machine and
