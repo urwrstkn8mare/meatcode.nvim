@@ -24,8 +24,9 @@ a merged catalog, solve/test locally, submit to any of the three.
 - [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim) for the
   problem finder
 - `python3` and/or a C++ compiler for local test runs
-- [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) to execute
-  provider-supplied reference/editorial/community code safely on Linux
+- [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) on Linux or
+  Apple's built-in `sandbox-exec` on macOS to execute provider-supplied
+  reference/editorial/community code safely
 - optional: [image.nvim](https://github.com/3rd/image.nvim) for inline diagrams
 
 Only C++ and Python are supported today; PRs for more languages welcome.

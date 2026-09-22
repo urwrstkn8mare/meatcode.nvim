@@ -88,7 +88,7 @@ end
 
 local function harness_dir()
   local this = debug.getinfo(1, "S").source:sub(2)
-  return vim.fs.dirname(this) .. "/harness"
+  return vim.fs.dirname(vim.fn.fnamemodify(this, ":p")) .. "/harness"
 end
 
 local function workdir(problem_id, lang)
@@ -256,11 +256,11 @@ end
 
 
 
---- Isolate provider-supplied code from the network, home directory, process
---- table and host filesystem. Only the per-run scratch directory is writable.
---- The user may opt out explicitly; otherwise missing bubblewrap fails closed.
-local function sandbox_command(cmd, dir, required)
-  if not required or config.options.runner.sandbox == false then return cmd, false end
+--- Linux: bubblewrap runs each candidate in fresh user, PID, network, IPC and
+--- mount namespaces. `/usr` and the dynamic-loader cache are exposed read-only,
+--- `/dev`, `/proc` and a tmpfs `/tmp` are virtual, and only the scratch
+--- directory is writable.
+local function linux_sandbox_command(cmd, dir)
   if vim.fn.executable("bwrap") ~= 1 then
     return nil, "bubblewrap (`bwrap`) is required to run provider-supplied code safely"
   end
@@ -290,6 +290,44 @@ local function sandbox_command(cmd, dir, required)
     table.insert(wrapped, arg)
   end
   return wrapped, true
+end
+
+--- macOS: `sandbox-exec` applies a Seatbelt profile that denies the network,
+--- the home directory and external volumes, clears the environment, and makes
+--- only the scratch directory readable and writable. There is no PID namespace
+--- on macOS, so the process table stays visible; otherwise the scope matches
+--- Linux. Paths need no rewriting because the process keeps the host layout.
+local function macos_sandbox_command(cmd, dir)
+  if vim.fn.executable("sandbox-exec") ~= 1 then
+    return nil, "`sandbox-exec` is required to run provider-supplied code safely on macOS"
+  end
+  local home = vim.uv.os_homedir() or "/nonexistent"
+  local wrapped = {
+    "sandbox-exec",
+    "-D", "WORK_DIR=" .. dir,
+    "-D", "HOME_DIR=" .. home,
+    "-f", harness_dir() .. "/sandbox.sb", "--",
+    "/usr/bin/env", "-i",
+    "PATH=/usr/bin:/bin",
+    "HOME=/nonexistent",
+    "TMPDIR=/tmp",
+    "LANG=C.UTF-8",
+  }
+  for _, arg in ipairs(cmd) do
+    table.insert(wrapped, arg)
+  end
+  return wrapped, true
+end
+
+--- Isolate provider-supplied code from the network, home directory, process
+--- table and host filesystem. Only the per-run scratch directory is writable.
+--- The user may opt out explicitly; otherwise a missing sandbox fails closed.
+local function sandbox_command(cmd, dir, required)
+  if not required or config.options.runner.sandbox == false then return cmd, false end
+  if vim.fn.has("mac") == 1 then
+    return macos_sandbox_command(cmd, dir)
+  end
+  return linux_sandbox_command(cmd, dir)
 end
 
 local function parallelism(case_count)

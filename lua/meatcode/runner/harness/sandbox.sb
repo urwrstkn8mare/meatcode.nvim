@@ -1,0 +1,12 @@
+; Seatbelt profile for provider-supplied reference/editorial/community code.
+; macOS has no equivalent of bubblewrap's namespaces, so this profile denies the
+; network, the home directory and external volumes, and re-allows only the
+; per-run scratch directory (WORK_DIR). Everything else runs with default
+; permissions, which matches the Linux sandbox's "shared host kernel" caveat.
+(version 1)
+(allow default)
+(deny network*)
+(deny file-read* file-write* process-exec file-map-executable (subpath "/Users"))
+(deny file-read* file-write* process-exec file-map-executable (subpath (param "HOME_DIR")))
+(deny file-read* file-write* process-exec file-map-executable (subpath "/Volumes"))
+(allow file-read* file-write* process-exec file-map-executable (subpath (param "WORK_DIR")))

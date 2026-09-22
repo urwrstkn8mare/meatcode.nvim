@@ -144,19 +144,22 @@ is named when the harness had got far enough to start one.
 
 Reference, editorial and community implementations are remote code. With the
 default `runner.sandbox = true`, both Python execution and C++ compilation/
-execution require Linux bubblewrap (`bwrap`) and run in fresh user, PID,
-network, IPC and mount namespaces. The sandbox exposes `/usr`, the dynamic
-loader cache and minimal `/dev` read-only/as needed; it exposes no home
-directory or repository, disables networking, clears the environment, and
-makes only that run's scratch directory writable.
+execution run isolated from the network, the home directory/repository and the
+rest of the host filesystem, with only the per-run scratch directory writable.
+On Linux that means fresh user, PID, network, IPC and mount namespaces via
+bubblewrap (`bwrap`), exposing `/usr`, the dynamic loader cache and minimal
+`/dev` read-only. On macOS `sandbox-exec` applies a Seatbelt profile with the
+same scope; macOS has no PID namespace, so the host process table stays
+visible. Both clear the environment.
 
 This materially limits ordinary malicious code, but is not a VM: it shares the
 host kernel, has no memory/cgroup quota, and compiler/interpreter/kernel
 vulnerabilities remain in scope. The existing wall-clock timeout limits CPU
 loops but not every denial-of-service shape.
 
-If `bwrap` is unavailable, provider-supplied executable candidates fail closed
-and selection continues toward statement/learned answers. Setting
-`runner.sandbox = false` opts out and runs provider code with your full user
-permissions: it could read SSH keys/tokens, modify files, use the network, spawn
-processes or otherwise do anything your account can do.
+If `bwrap` (Linux) or `sandbox-exec` (macOS) is unavailable, provider-supplied
+executable candidates fail closed and selection continues toward statement/
+learned answers. Setting `runner.sandbox = false` opts out and runs provider
+code with your full user permissions: it could read SSH keys/tokens, modify
+files, use the network, spawn processes or otherwise do anything your account
+can do.

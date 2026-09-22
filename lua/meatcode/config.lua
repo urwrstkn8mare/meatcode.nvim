@@ -22,9 +22,10 @@ local defaults = {
 	timeout = 30,
 
 	runner = {
-		-- Remote reference/editorial/community code is untrusted. On Linux,
-		-- require bubblewrap and run it without network, home or host filesystem
-		-- access. Set false only to accept native code execution as your user.
+		-- Remote reference/editorial/community code is untrusted. Run it without
+		-- network, home or host filesystem access: bubblewrap (`bwrap`) on Linux,
+		-- Apple's `sandbox-exec` on macOS. Set false only to accept native code
+		-- execution as your user.
 		sandbox = true,
 		-- Test cases run in separate processes. 0 uses the smaller of case count
 		-- and available CPU count; 1 forces sequential execution.
