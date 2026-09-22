@@ -9,7 +9,8 @@ local M = {}
 local function telescope()
   local modules = {}
   for _, name in ipairs({
-    "telescope.pickers", "telescope.finders", "telescope.config", "telescope.actions.state",
+    "telescope.pickers", "telescope.finders", "telescope.config",
+    "telescope.actions", "telescope.actions.state",
   }) do
     local ok, module = pcall(require, name)
     if not ok then return nil end
@@ -37,6 +38,7 @@ function M.open(problem)
   local pickers = modules["telescope.pickers"]
   local finders = modules["telescope.finders"]
   local conf = modules["telescope.config"].values
+  local actions = modules["telescope.actions"]
   local action_state = modules["telescope.actions.state"]
   pickers.new({}, {
     prompt_title = "Open link",
@@ -53,7 +55,7 @@ function M.open(problem)
     attach_mappings = function(prompt_buf, map)
       local function open_selected()
         local entry = action_state.get_selected_entry()
-        require("telescope.actions").close(prompt_buf)
+        actions.close(prompt_buf)
         if entry then vim.ui.open(entry.value.url) end
       end
       map("i", "<CR>", open_selected)
