@@ -1,8 +1,8 @@
 # meatcode.nvim
 
-(L/N)eetCode without leaving Neovim. Browse NeetCode's roadmap or a merged
-catalog of LeetCode, NeetCode and LintCode, solve locally, submit to any of the
-three.
+Competitive practice without leaving Neovim. Browse NeetCode's roadmap or a
+merged catalog of LeetCode, NeetCode and LintCode, solve locally, submit to any
+of the three.
 
 ![The meatcode.nvim homepage](doc/screenshot.png)
 
