@@ -7,15 +7,12 @@ a merged catalog, solve/test locally, submit to any of the three.
 
 ## Features
 
-- Test locally with a stage-major oracle chain: provider references, official
-  editorials, sanity-checked popular community solutions, then statement/judge-
-  learned answers ([how](doc/local-runs.md)).
-- Test cases are a file you own. Edit them, or add a failed submission's input;
-  the judge's disclosed answer is cached for future local runs ([more](doc/local-runs.md)).
+- Test locally (fast) against a sandboxed reference 'oracle' solution ([how](doc/local-runs.md)).
+- Editable test cases (can also take from failed submissions) ([more](doc/local-runs.md)).
 - C++ autocomplete sees exactly the types each problem defines, via a generated per-problem header ([why](doc/cpp.md)).
-- Statements, tests, starter code and submissions fall through a reorderable chain across three providers.
-- Browse NeetCode's roadmap as an ASCII DAG with per-topic progress across Blind 75, 150, 250, or the full catalog.
-- Progress is counted from your real submission history, merged across LeetCode, NeetCode and LintCode ([how](doc/progress.md)).
+- Statements, tests, starter code and submissions fall through a reorderable chain across all 3 providers.
+- Browse NeetCode's roadmap as an ASCII DAG.
+- Completions is counted from your real cloud submission history, merged across all 3 providers ([how](doc/progress.md)).
 - Your solution is a real file on disk, so LSP, treesitter, formatter and your keymaps just work.
 
 ## Requirements
