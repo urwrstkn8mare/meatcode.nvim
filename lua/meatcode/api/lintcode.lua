@@ -96,35 +96,31 @@ function M.problem(problem_id, lang, cb)
     if err then return cb(err, nil) end
     if type(data) ~= "table" then return cb("unknown LintCode problem: " .. id, nil) end
 
-    local starter_url = string.format("%s/new/api/problems/%s/reset/?scene=1&language=%s",
-      API, id, vim.uri_encode(M.lang(lang), "rfc2396"))
-    request("starter code", { url = starter_url }, function(starter_err, starter)
-      if starter_err then return cb(starter_err, nil) end
-      local available, seen = {}, {}
-      for _, remote in ipairs(type(data.accept_languages) == "table" and data.accept_languages or {}) do
-        local local_name = LINTCODE_TO_LANG[remote]
-        if local_name and not seen[local_name] then
-          seen[local_name] = true
-          table.insert(available, local_name)
-        end
+    local available, seen = {}, {}
+    for _, remote in ipairs(type(data.accept_languages) == "table" and data.accept_languages or {}) do
+      local local_name = LINTCODE_TO_LANG[remote]
+      if local_name and not seen[local_name] then
+        seen[local_name] = true
+        table.insert(available, local_name)
       end
-      local code = type(starter) == "table" and starter.code or ""
+    end
 
-      -- LintCode's own `testcase_sample` is the visible input with no expected
-      -- output attached, so it can be run but not judged. The statement's
-      -- examples carry both halves, so they are preferred when present.
-      local cases, outputs = {}, {}
-      for _, example in ipairs(examples.lintcode(data.example)) do
-        table.insert(cases, examples.normalize_lintcode_input(example.input))
-        -- Statements write booleans the way Python does.
-        local output = example.output:gsub("^True$", "true"):gsub("^False$", "false")
-        table.insert(outputs, output)
-      end
-      if #cases == 0 and type(data.testcase_sample) == "string"
-        and vim.trim(data.testcase_sample) ~= "" then
-        cases = { examples.normalize_lintcode_input(data.testcase_sample) }
-      end
+    -- LintCode's own `testcase_sample` is the visible input with no expected
+    -- output attached, so it can be run but not judged. The statement's
+    -- examples carry both halves, so they are preferred when present.
+    local cases, outputs = {}, {}
+    for _, example in ipairs(examples.lintcode(data.example)) do
+      table.insert(cases, examples.normalize_lintcode_input(example.input))
+      -- Statements write booleans the way Python does.
+      local output = example.output:gsub("^True$", "true"):gsub("^False$", "false")
+      table.insert(outputs, output)
+    end
+    if #cases == 0 and type(data.testcase_sample) == "string"
+      and vim.trim(data.testcase_sample) ~= "" then
+      cases = { examples.normalize_lintcode_input(data.testcase_sample) }
+    end
 
+    local function build(fetch_lang, code)
       cb(nil, {
         provider = "lintcode",
         schema = util.META_SCHEMA,
@@ -134,7 +130,7 @@ function M.problem(problem_id, lang, cb)
         difficulty = ({ [0] = "Naive", "Easy", "Medium", "Hard" })[tonumber(data.level)] or "Unknown",
         paid_only = data.is_locked == true,
         description = description(data),
-        starterCode = { [lang] = type(code) == "string" and code or "" },
+        starterCode = fetch_lang and { [fetch_lang] = type(code) == "string" and code or "" } or {},
         availableLanguages = available,
         custom_test_cases = cases,
         expected_outputs = outputs,
@@ -143,6 +139,23 @@ function M.problem(problem_id, lang, cb)
         topics = tag_names(data.tags),
         companies = tag_names(data.company_tags),
       })
+    end
+
+    -- LintCode's reset endpoint 400s for a language the problem never shipped
+    -- (single-language problems are common). Fetch starter code for the
+    -- requested language only when it is actually accepted; otherwise fall
+    -- back to whichever language is, mirroring the language fallback the
+    -- problem UI applies once it sees `availableLanguages`. Either way this
+    -- never fails the whole fetch just because the starter template is
+    -- missing for one language.
+    local fetch_lang = vim.tbl_contains(available, lang) and lang or available[1]
+    if not fetch_lang then return build(nil, nil) end
+
+    local starter_url = string.format("%s/new/api/problems/%s/reset/?scene=1&language=%s",
+      API, id, vim.uri_encode(M.lang(fetch_lang), "rfc2396"))
+    request("starter code", { url = starter_url }, function(starter_err, starter)
+      if starter_err then return build(fetch_lang, nil) end
+      build(fetch_lang, type(starter) == "table" and starter.code or "")
     end)
   end)
 end
