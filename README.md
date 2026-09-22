@@ -8,23 +8,25 @@ a merged catalog, solve/test locally, submit to any of the three.
 ## Features
 
 - **Local test runs, no network, no rate limit.** `<leader>nr` runs your code
-  and NeetCode's reference solution over the same inputs on your machine and
+  against NeetCode's reference solution on the same inputs, locally, and
   diffs them. 148/150 of the NeetCode 150 in Python, 146/150 in C++ —
   [how this works](doc/local-runs.md).
-- **Editable test cases.** The cases are a file you own; add, edit or delete
+- **Editable test cases.** Cases are a file you own — add, edit or delete
   them, and `<leader>na` drops a failed submission's input straight in —
   [more](doc/local-runs.md).
-- **Autocomplete knows the problem's types.** C++ starter code omits
-  `ListNode`/`TreeNode`/`Node`; the plugin generates a per-problem header and
-  `.clangd` so clangd sees exactly the types that problem defines — and rejects
-  the ones it doesn't. [Why per-problem](doc/cpp.md).
+- **Type-aware C++ autocomplete.** Starter code omits `ListNode`/`TreeNode`/
+  `Node`; the plugin generates a per-problem header and `.clangd` so clangd
+  sees exactly the types that problem defines, and rejects the rest.
+  [Why per-problem](doc/cpp.md).
 - **Three providers, one problem.** Statements, tests and starter code come
-  from the first provider that can serve them; submissions go to the first that
-  accepts them. Both chains are reorderable with `<leader>nc`.
-- **NeetCode's roadmap as an ASCII DAG**, with per-topic progress, plus Blind
-  75 / NeetCode 150 / 250 / all.
-- **Progress from your real submission history**, shared across all three
-  providers, not a local checkbox — [how it's counted](doc/progress.md).
+  from whichever provider serves them first; submissions go to whichever
+  accepts them first. Reorder either chain with `<leader>nc`.
+- **NeetCode's roadmap as an ASCII DAG**, with per-topic progress across
+  Blind 75, NeetCode 150, 250, or the full catalog.
+- **One progress count, from your real submission history.** A problem's
+  count is the number of distinct calendar days you got an accepted
+  submission for it, merged across LeetCode and NeetCode and capped at one
+  per day — not a local checkbox. [How it's counted](doc/progress.md).
 - **Your solution is a real file on disk**, so LSP, treesitter, formatter and
   your own keymaps all behave normally.
 
@@ -143,5 +145,4 @@ Fair warning: this repo is mostly the result of some careful LLM prompting. I
 still read every issue and PR and know the codebase well enough to maintain it
 for as long as I use it.
 
-Thanks to [leetcode.nvim](https://github.com/kawre/leetcode.nvim), which this
-plugin took its first cues from.
+Thanks to [leetcode.nvim](https://github.com/kawre/leetcode.nvim) for inspiration.
