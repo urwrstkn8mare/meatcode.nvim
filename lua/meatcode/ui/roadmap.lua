@@ -75,21 +75,16 @@ end
 
 local HEADER_ROWS = 3
 
+--- Centred header: which list is on screen, plus its completion split.
 local function summary_line(width)
   local s = progress.summary(config.options.list)
   local d = s.by_difficulty
   local list = config.options.list
-  local left = string.format("  %s", catalog.LIST_LABELS[list] or list)
-  local right = string.format(
-    "Easy %d/%d   Medium %d/%d   Hard %d/%d   ·   %d/%d completed  ",
+  local text = string.format("%s   ·   Easy %d/%d   Medium %d/%d   Hard %d/%d   ·   %d/%d completed",
+    catalog.LIST_LABELS[list] or list,
     d.Easy.done, d.Easy.total, d.Medium.done, d.Medium.total,
     d.Hard.done, d.Hard.total, s.done, s.total)
-
-  local pad = width - vim.fn.strdisplaywidth(left) - vim.fn.strdisplaywidth(right)
-  if pad < 1 then
-    return left .. " " .. right
-  end
-  return left .. string.rep(" ", pad) .. right
+  return util.center(text, width)
 end
 
 local function render()
@@ -123,9 +118,11 @@ local function render()
   })
   state.layout = layout
 
+  local rule = string.rep("─", math.min(math.max(10, width - 2), 72))
   local lines = {
+    "",
     summary_line(width),
-    string.rep("─", math.max(10, width - 2)),
+    util.center(rule, width),
     "",
   }
   for _, l in ipairs(layout.lines) do
@@ -138,18 +135,18 @@ local function render()
   vim.bo[state.buf].modifiable = false
 
   local spans = {
-    { 0, 0, #lines[1], "MeatCodeHeader" },
-    { 1, 0, #lines[2], "MeatCodeMuted" },
+    { 1, 0, #lines[2], "MeatCodeHeader" },
+    { 2, 0, #lines[3], "MeatCodeMuted" },
   }
   for _, s in ipairs(layout.spans) do
-    table.insert(spans, { s[1] + HEADER_ROWS, s[2], s[3], s[4] })
+    table.insert(spans, { s[1] + HEADER_ROWS + 1, s[2], s[3], s[4] })
   end
   hl.apply(state.buf, spans)
 
   -- Park the cursor on the selected node so scrolling follows navigation.
   local pos = layout.positions[state.selected]
   if pos then
-    local row = pos.row + HEADER_ROWS + 2
+    local row = pos.row + HEADER_ROWS + 3
     pcall(vim.api.nvim_win_set_cursor, 0, { math.min(row, #lines), math.max(pos.col, 0) })
   end
   hide_cursor()

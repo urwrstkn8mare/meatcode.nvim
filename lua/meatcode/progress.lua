@@ -85,6 +85,17 @@ function M.is_solved(problem)
   return M.completion_count(problem) > 0
 end
 
+--- How many distinct problems have at least one completion day in `lang`.
+function M.solved_total(lang)
+  local by_problem = load_cache()[lang or config.options.lang]
+  if type(by_problem) ~= "table" then return 0 end
+  local total = 0
+  for _, days in pairs(by_problem) do
+    if type(days) == "table" and next(days) then total = total + 1 end
+  end
+  return total
+end
+
 function M.pattern_progress(pattern, list)
   catalog.load()
   local problems = catalog.pattern_problems(pattern, list)

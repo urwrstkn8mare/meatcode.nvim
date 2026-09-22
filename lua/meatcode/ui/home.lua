@@ -7,9 +7,36 @@ local problem_catalog = require("meatcode.catalog.problems")
 local progress = require("meatcode.progress")
 local providers = require("meatcode.providers")
 
---- The homepage: a full-page status screen with single-key jumps into the
---- workflow. q/<Esc> pops the page stack rather than closing everything.
+--- The homepage: a centred full-page status screen with single-key jumps into
+--- the workflow. q/<Esc> pops the page stack rather than closing everything.
 local M = {}
+
+--- The meat, then CODE in the same block style. Both blocks are centred as a
+--- unit so the letters stay aligned whatever the window width is.
+local MEAT = {
+  "                   █████████",
+  "               ███████████████",
+  "             █████████  ████████",
+  "  ████████████████          ██ ██",
+  "███████     ████    █████    ██ ██",
+  "█████               ██   ██    ████",
+  "██ █                 ██   ██    ████",
+  "████                  █████    ██ ██",
+  "██ ██                         ██ ██",
+  " ███████                  ████████",
+  "  ██████████████████████████████",
+  "     ████████████████████████",
+}
+
+local CODE = {
+  " ██████   ██████  ██████   ████████",
+  "██    ██ ██    ██ ██   ██  ██",
+  "██       ██    ██ ██    ██ ██",
+  "██       ██    ██ ██    ██ ██████",
+  "██       ██    ██ ██    ██ ██",
+  "██    ██ ██    ██ ██   ██  ██",
+  " ██████   ██████  ██████   ████████",
+}
 
 local state = { buf = nil, rows = {}, subscribed = false }
 
@@ -32,60 +59,64 @@ local function streak_text()
   return string.format("%d day%s · %s", days, days == 1 and "" or "s", today)
 end
 
+--- One rendered row: `text` plus highlight spans in the row's own columns.
+local function block(entries, width)
+  local block_width = 0
+  for _, entry in ipairs(entries) do
+    block_width = math.max(block_width, vim.fn.strdisplaywidth(entry.text))
+  end
+  local pad = math.max(0, math.floor((width - block_width) / 2))
+  local prefix = string.rep(" ", pad)
+  local out = {}
+  for _, entry in ipairs(entries) do
+    local shifted = {}
+    for _, span in ipairs(entry.spans or {}) do
+      table.insert(shifted, { span[1] + #prefix, span[2] + #prefix, span[3] })
+    end
+    table.insert(out, { text = entry.text == "" and "" or prefix .. entry.text, spans = shifted, fn = entry.fn })
+  end
+  return out
+end
+
 local function render()
   if not is_open() then return end
-  local cat = catalog.get() or catalog.load()
   local all = problem_catalog.get() or problem_catalog.load()
-  local summary = progress.summary(config.options.list)
   local keys = config.options.keys.home or {}
+  local width = vim.api.nvim_win_get_width(0)
 
-  -- Block-letter title: the user's meat, with CODE in the same style.
-  local title = {
-    "                   █████████",
-    "               ███████████████",
-    "             █████████  ████████   ██████   ██████  ██████  ████████",
-    "  ████████████████          ██ ██  ██    ██ ██    ██ ██   ██ ██",
-    "███████     ████    █████    ██ ██  ██      ██      ██ ██   ██ ██",
-    "█████               ██   ██    ████  ██      ██      ██ ██   ██ ██████",
-    "██ █                 ██   ██    ████  ██      ██      ██ ██   ██ ██",
-    "████                  █████    ██ ██  ██    ██ ██    ██ ██   ██ ██",
-    "██ ██                         ██ ██   ██████   ██████  ██████  ████████",
-    " ███████                  ████████",
-    "  ██████████████████████████████",
-    "     ████████████████████████",
-  }
-  local lines, spans, rows = { "" }, {}, {}
-  for _, art in ipairs(title) do
-    table.insert(lines, "  " .. art)
-    table.insert(spans, { #lines - 1, 2, 2 + vim.fn.strdisplaywidth(art), "MeatCodeHeader" })
+  local title = {}
+  for _, art in ipairs(MEAT) do
+    table.insert(title, { text = art, spans = { { 0, #art, "MeatCodeHeader" } } })
   end
-  table.insert(lines, "")
+  table.insert(title, { text = "" })
+  for _, art in ipairs(CODE) do
+    table.insert(title, { text = art, spans = { { 0, #art, "MeatCodeHeader" } } })
+  end
 
-  local function section(title)
-    table.insert(lines, "  " .. title)
-    table.insert(spans, { #lines - 1, 2, 2 + #title, "MeatCodeMuted" })
+  local body = {}
+  local function section(name)
+    table.insert(body, { text = name, spans = { { 0, #name, "MeatCodeMuted" } } })
   end
-  local function row(text, group)
-    table.insert(lines, text)
-    if group then table.insert(spans, { #lines - 1, 0, #text, group }) end
+  local function row(label, value, group)
+    local text = string.format("  %-9s %s", label, value)
+    table.insert(body, { text = text, spans = group and { { 0, #text, group } } or nil })
   end
   local function action(key, label, fn)
-    local line = string.format("    %-8s %s", key, label)
-    table.insert(lines, line)
-    table.insert(spans, { #lines - 1, 4, 4 + #key, "MeatCodeKey" })
-    rows[#lines] = fn
+    local text = string.format("  %-9s %s", key, label)
+    table.insert(body, { text = text, spans = { { 2, 2 + #key, "MeatCodeKey" } }, fn = fn })
   end
 
   section("status")
   for _, backend in ipairs(providers.all()) do
     local logged_in = backend.auth.is_logged_in()
-    row(string.format("    %-8s %s", backend.label, logged_in and "logged in" or "logged out"),
+    row(backend.label, logged_in and "logged in" or "logged out",
       logged_in and "MeatCodeDone" or "MeatCodeMuted")
   end
-  row(string.format("    %-8s %s", "language", lang_info.name(config.options.lang)))
-  row(string.format("    %-8s %d problems", "merged", all and #all.problems or 0))
-  row(string.format("    %-8s %d/%d solved · %s", "progress", summary.done, summary.total, streak_text()))
-  row("")
+  row("language", lang_info.name(config.options.lang))
+  row("catalog", string.format("%d problems", all and #all.problems or 0))
+  row("streak", streak_text())
+  row("solved", string.format("%d problems", progress.solved_total()))
+  table.insert(body, { text = "" })
 
   section("open")
   local list_label = catalog.LIST_LABELS[config.options.list] or config.options.list
@@ -93,8 +124,28 @@ local function render()
   action(keys.list or "l", "problem finder", function() require("meatcode").list() end)
   action(keys.random or "n", "random unsolved (merged catalog)", function() require("meatcode").random() end)
   action(keys.daily or "d", "problem of the day (LeetCode)", function() require("meatcode").daily() end)
-  row("")
-  row("  <CR> opens the row under the cursor · q back", "MeatCodeMuted")
+
+  local hint = "<CR> open · q back"
+  local rendered = {}
+  vim.list_extend(rendered, block(title, width))
+  table.insert(rendered, { text = "" })
+  vim.list_extend(rendered, block(body, width))
+  table.insert(rendered, { text = "" })
+  vim.list_extend(rendered, block({ { text = hint, spans = { { 0, #hint, "MeatCodeMuted" } } } }, width))
+
+  -- Vertically centre the whole screen, leaving a little breathing room.
+  local height = vim.api.nvim_win_get_height(0)
+  local top = math.max(1, math.floor((height - #rendered) / 3))
+
+  local lines, spans, rows = {}, {}, {}
+  for _ = 1, top do table.insert(lines, "") end
+  for _, entry in ipairs(rendered) do
+    table.insert(lines, entry.text)
+    for _, span in ipairs(entry.spans or {}) do
+      table.insert(spans, { #lines - 1, span[1], span[2], span[3] })
+    end
+    if entry.fn then rows[#lines] = entry.fn end
+  end
 
   vim.bo[state.buf].modifiable = true
   vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)

@@ -27,7 +27,6 @@ local function render()
   local problems = catalog.pattern_problems(state.pattern, state.list)
   state.rows = problems
 
-  local lines, spans = {}, {}
   local done = 0
   for _, p in ipairs(problems) do
     if progress.is_solved(p) then
@@ -35,32 +34,47 @@ local function render()
     end
   end
 
-  table.insert(lines, string.format("  %s — %d/%d completed · %s",
-    state.pattern, done, #problems, catalog.LIST_LABELS[state.list] or state.list))
-  table.insert(spans, { 0, 0, #lines[1], "MeatCodeHeader" })
-  table.insert(lines, "")
+  -- Build every row left-aligned, then centre the block as a unit so the
+  -- columns stay lined up.
+  local entries = {}
+  local header = string.format("%s — %d/%d completed · %s",
+    state.pattern, done, #problems, catalog.LIST_LABELS[state.list] or state.list)
+  table.insert(entries, { text = header, spans = { { 0, #header, "MeatCodeHeader" } } })
+  table.insert(entries, { text = "" })
 
-  for i, p in ipairs(problems) do
+  for _, p in ipairs(problems) do
     local count = progress.completion_count(p)
     local mark = string.format("%2d", count)
     local nc = p.providers and p.providers.neetcode
     local lock = nc and nc.paid and "  [pro]" or ""
-    local line = string.format("  %s  %-52s %-7s%s", mark, p.name, p.difficulty, lock)
-    table.insert(lines, line)
-
-    local row = #lines - 1
-    table.insert(spans, { row, 2, 2 + #mark, count > 0 and "MeatCodeDone" or "MeatCodeTodo" })
+    local line = string.format("%s  %-52s %-7s%s", mark, p.name, p.difficulty, lock)
+    local row_spans = { { 0, #mark, count > 0 and "MeatCodeDone" or "MeatCodeTodo" } }
     if count > 0 then
-      table.insert(spans, { row, 0, #line, "MeatCodeDone" })
+      table.insert(row_spans, { 0, #line, "MeatCodeDone" })
     end
     local dcol = line:find(p.difficulty, 1, true)
     if dcol then
-      table.insert(spans, { row, dcol - 1, dcol - 1 + #p.difficulty, hl.difficulty(p.difficulty) })
+      table.insert(row_spans, { dcol - 1, dcol - 1 + #p.difficulty, hl.difficulty(p.difficulty) })
     end
     if lock ~= "" then
-      table.insert(spans, { row, #line - #lock, #line, "MeatCodeWarn" })
+      table.insert(row_spans, { #line - #lock, #line, "MeatCodeWarn" })
     end
-    local _ = i
+    table.insert(entries, { text = line, spans = row_spans })
+  end
+
+  local width = vim.api.nvim_win_get_width(0)
+  local block_width = 0
+  for _, entry in ipairs(entries) do
+    block_width = math.max(block_width, vim.fn.strdisplaywidth(entry.text))
+  end
+  local prefix = string.rep(" ", math.max(0, math.floor((width - block_width) / 2)))
+
+  local lines, spans = { "" }, {}
+  for _, entry in ipairs(entries) do
+    table.insert(lines, entry.text == "" and "" or prefix .. entry.text)
+    for _, span in ipairs(entry.spans or {}) do
+      table.insert(spans, { #lines - 1, span[1] + #prefix, span[2] + #prefix, span[3] })
+    end
   end
 
   vim.bo[state.buf].modifiable = true
@@ -75,7 +89,7 @@ local function current()
     return nil
   end
   local row = vim.api.nvim_win_get_cursor(0)[1]
-  return state.rows[row - 2]
+  return state.rows[row - 3]
 end
 
 local function keymaps()
@@ -108,6 +122,7 @@ function M.open(pattern, list)
   if not pattern then
     return
   end
+  catalog.load()
   state.pattern = pattern
   state.list = list or config.options.list
 
@@ -124,7 +139,7 @@ function M.open(pattern, list)
 
   keymaps()
   render()
-  pcall(vim.api.nvim_win_set_cursor, 0, { 3, 0 })
+  pcall(vim.api.nvim_win_set_cursor, 0, { 4, 0 })
   if not state.subscribed then
     state.subscribed = true
     progress.on_update(function()

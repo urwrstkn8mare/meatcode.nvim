@@ -11,6 +11,19 @@ local function current()
   return stack[#stack]
 end
 
+--- A page is a screen, not a file: no numbers, no signs, no wrapping.
+local function dress(win)
+  vim.wo[win].number = false
+  vim.wo[win].relativenumber = false
+  vim.wo[win].signcolumn = "no"
+  vim.wo[win].foldcolumn = "0"
+  vim.wo[win].list = false
+  vim.wo[win].wrap = false
+  vim.wo[win].cursorline = false
+  vim.wo[win].colorcolumn = ""
+  vim.opt_local.fillchars:append("eob: ")
+end
+
 function M.depth()
   return #stack
 end
@@ -28,6 +41,7 @@ function M.push(page)
   vim.api.nvim_win_set_buf(win, page.buf)
   page.win = win
   page.tab = vim.api.nvim_get_current_tabpage()
+  dress(win)
   tabs.name_buffer(page.buf, page.title)
   tabs.set(page.tab, page.title)
 end
@@ -47,6 +61,7 @@ function M.pop()
     vim.api.nvim_win_set_buf(win, prev.buf)
     prev.win = win
     prev.tab = vim.api.nvim_get_current_tabpage()
+    dress(win)
     tabs.name_buffer(prev.buf, prev.title)
     tabs.set(prev.tab, prev.title)
     if prev.on_show then pcall(prev.on_show) end
