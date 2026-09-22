@@ -158,14 +158,16 @@ against the selected executable class, or compare it with a known answer list.
 Encode/decode pairs such as Serialize and Deserialize Binary Tree are judged by
 round-tripping the input through both halves, which needs no oracle at all.
 
-Provider solutions are remote code. By default they compile and run without
-network or home/repository access, with only the per-run scratch directory
-writable: bubblewrap (`bwrap`) on Linux (which also hides the host process
-table behind a PID namespace), Apple's `sandbox-exec` on macOS. Missing either
-fails closed and falls through to answer-only judging. `runner.sandbox = false`
-explicitly opts into running provider code with your full user permissions.
-Neither is a VM: the host kernel is shared and memory/process resources are not
-cgroup-limited.
+Provider solutions are remote code. They run separately from your solution:
+oracle validation and first-time per-case output computation are sandboxed
+(cached thereafter), then your code runs alone against those answers. Default
+isolation denies network and home/repository access, with only the per-run
+scratch directory writable: bubblewrap (`bwrap`) on Linux (which also hides
+the host process table behind a PID namespace), Apple's `sandbox-exec` on
+macOS. Missing either fails closed and falls through to answer-only judging.
+`runner.sandbox = false` opts into running provider code with your full user
+permissions. Neither is a VM: the host kernel is shared and memory/process
+resources are not cgroup-limited.
 
 Problems that cannot be reproduced locally — SQL, and anything encoding
 arguments by reference such as clone-graph's adjacency list — say so plainly

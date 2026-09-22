@@ -22,8 +22,8 @@ a merged catalog, solve/test locally, submit to any of the three.
   problem finder
 - `python3` and/or a C++ compiler for local test runs
 - [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) on Linux or
-  Apple's built-in `sandbox-exec` on macOS to execute provider-supplied
-  reference/editorial/community code safely
+  Apple's built-in `sandbox-exec` on macOS to sandbox provider-supplied
+  reference/editorial/community oracles (your solution runs separately)
 - optional: [image.nvim](https://github.com/3rd/image.nvim) for inline diagrams
 
 Only C++ and Python are supported today; PRs for more languages welcome.

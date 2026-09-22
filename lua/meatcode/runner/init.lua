@@ -8,8 +8,10 @@ local util = require("meatcode.util")
 --- statement answers. Provider fallback order only breaks ties inside a stage.
 --- Community code is never trusted blindly: candidates are tried in popularity
 --- order and must pass every known example before one may judge user cases.
---- Cases with no known answer still execute and report RAN under the statement
---- oracle. A cloud judge's revealed expected output is persisted for later runs.
+--- Executable oracles run separately (sandboxed) and their per-case outputs are
+--- cached; your code then runs alone against those answers. Cases with no known
+--- answer still execute and report RAN under the statement oracle. A cloud
+--- judge's revealed expected output is persisted for later runs.
 local M = {}
 
 M.SUPPORTED = { python = true, cpp = true }
@@ -58,23 +60,31 @@ function M.learn(problem_id, input, expected)
 end
 
 --- Line all published and judge-learned answers up with editable local cases.
+--- `meta._oracle_outputs` (from a prior sandboxed oracle run) overrides everything
+--- else for the cases it covers. `meta._probe_oracle` skips learned answers so a
+--- probe measuring the oracle itself is not short-circuited by a prior cache.
 local function expected_values(problem_id, meta, cases)
   local published = {}
-  for _, answer in ipairs(type(meta.oracle_answers) == "table" and meta.oracle_answers or {}) do
-    if type(answer.input) == "string" and type(answer.output) == "string" then
-      local key = case_key(answer.input)
-      if published[key] == nil then published[key] = answer.output end
+  if not meta._probe_oracle then
+    for _, answer in ipairs(type(meta.oracle_answers) == "table" and meta.oracle_answers or {}) do
+      if type(answer.input) == "string" and type(answer.output) == "string" then
+        local key = case_key(answer.input)
+        if published[key] == nil then published[key] = answer.output end
+      end
+    end
+    -- Compatibility with provider metadata used directly by scripts.
+    local sources = type(meta.custom_test_cases) == "table" and meta.custom_test_cases or {}
+    for i, output in ipairs(type(meta.expected_outputs) == "table" and meta.expected_outputs or {}) do
+      if sources[i] and type(output) == "string" and output ~= "" then
+        local key = case_key(sources[i])
+        if published[key] == nil then published[key] = output end
+      end
+    end
+    for key, output in pairs(util.read_json(learned_path(problem_id)) or {}) do
+      if type(output) == "string" and output ~= "" then published[key] = output end
     end
   end
-  -- Compatibility with provider metadata used directly by scripts.
-  local sources = type(meta.custom_test_cases) == "table" and meta.custom_test_cases or {}
-  for i, output in ipairs(type(meta.expected_outputs) == "table" and meta.expected_outputs or {}) do
-    if sources[i] and type(output) == "string" and output ~= "" then
-      local key = case_key(sources[i])
-      if published[key] == nil then published[key] = output end
-    end
-  end
-  for key, output in pairs(util.read_json(learned_path(problem_id)) or {}) do
+  for key, output in pairs(type(meta._oracle_outputs) == "table" and meta._oracle_outputs or {}) do
     if type(output) == "string" and output ~= "" then published[key] = output end
   end
   local out = {}
@@ -592,6 +602,140 @@ local function validation_path(problem_id, lang)
     config.options.cache_dir, util.slug(tostring(problem_id)), lang)
 end
 
+--- Per-case outputs from the selected executable oracle. Kept separate from
+--- user runs so provider code only executes when a case is new or the oracle
+--- itself changed.
+local function oracle_outputs_path(problem_id, lang)
+  return string.format("%s/oracle-outputs/%s-%s.json",
+    config.options.cache_dir, util.slug(tostring(problem_id)), lang)
+end
+
+local function sandbox_active(required)
+  return required and config.options.runner.sandbox ~= false
+end
+
+local function sandbox_phrase(required)
+  if sandbox_active(required) then
+    return "in sandbox"
+  end
+  if required and config.options.runner.sandbox == false then
+    return "with no sandbox (runner.sandbox=false)"
+  end
+  return "with no sandbox"
+end
+
+local function empty_oracle_cache(candidate, code_hash)
+  return {
+    stage = candidate.stage,
+    provider = candidate.provider,
+    id = candidate.id,
+    code_hash = code_hash,
+    outputs = {},
+  }
+end
+
+local function load_oracle_cache(problem_id, lang, candidate)
+  local code_hash = vim.fn.sha256(candidate.code)
+  local cached = util.read_json(oracle_outputs_path(problem_id, lang))
+  if type(cached) ~= "table"
+    or cached.code_hash ~= code_hash
+    or cached.stage ~= candidate.stage
+    or cached.provider ~= candidate.provider then
+    return empty_oracle_cache(candidate, code_hash)
+  end
+  cached.outputs = type(cached.outputs) == "table" and cached.outputs or {}
+  return cached
+end
+
+local function persist_oracle_cache(problem_id, lang, cache)
+  util.write_json(oracle_outputs_path(problem_id, lang), {
+    stage = cache.stage,
+    provider = cache.provider,
+    id = cache.id,
+    code_hash = cache.code_hash,
+    outputs = cache.outputs,
+  })
+end
+
+--- Record actuals from a sandboxed oracle probe / validation onto the cache.
+local function absorb_oracle_actuals(cache, report)
+  local errors = {}
+  for _, c in ipairs(type(report) == "table" and report.cases or {}) do
+    if c.status == "error" or c.status == "oracle_error" then
+      table.insert(errors, (type(c.error) == "string" and c.error:match("^[^\n]+")) or c.status)
+    elseif type(c.input) == "string" and type(c.actual) == "string" then
+      cache.outputs[case_key(c.input)] = c.actual
+    end
+  end
+  return errors
+end
+
+--- Ensure every case has an oracle output. Runs the selected provider solution
+--- alone (sandboxed) for cases that are missing; leaves the rest untouched.
+local function ensure_oracle_outputs(problem_id, lang, meta, candidate, cases, cb, status)
+  local cache = load_oracle_cache(problem_id, lang, candidate)
+  local missing, cached_n = {}, 0
+  for _, case in ipairs(cases) do
+    local out = cache.outputs[case_key(case)]
+    if type(out) == "string" and out ~= "" then
+      cached_n = cached_n + 1
+    else
+      table.insert(missing, case)
+    end
+  end
+
+  if #missing == 0 then
+    if status then
+      status(string.format(
+        "Oracle outputs: %d cached · your code will run with no sandbox",
+        cached_n))
+    end
+    return cb(nil, cache.outputs)
+  end
+
+  if status then
+    status(string.format(
+      "Oracle: computing %d new output%s %s (%d cached)",
+      #missing, #missing == 1 and "" or "s",
+      sandbox_phrase(true), cached_n))
+  end
+
+  local trial_meta = vim.deepcopy(meta)
+  trial_meta._untrusted_user = true
+  trial_meta._probe_oracle = true
+  trial_meta.oracle_answers = {}
+  trial_meta.expected_outputs = nil
+  trial_meta.custom_test_cases = nil
+  trial_meta._oracle_outputs = nil
+
+  run_selected(problem_id, candidate.code, lang, trial_meta, missing, function(report)
+    if report.unsupported then
+      return cb(report.error or "oracle unsupported", nil)
+    end
+    if report.error and #(report.cases or {}) == 0 then
+      return cb(report.error, nil)
+    end
+    local errors = absorb_oracle_actuals(cache, report)
+    if #errors > 0 then
+      return cb("oracle failed on a case: " .. errors[1], nil)
+    end
+    -- Every missing case should now have an output.
+    for _, case in ipairs(missing) do
+      local out = cache.outputs[case_key(case)]
+      if type(out) ~= "string" or out == "" then
+        return cb("oracle produced no output for a case", nil)
+      end
+    end
+    persist_oracle_cache(problem_id, lang, cache)
+    if status then
+      status(string.format(
+        "Oracle outputs ready (%d total) · your code will run with no sandbox",
+        cached_n + #missing))
+    end
+    cb(nil, cache.outputs)
+  end, "expected")
+end
+
 local function saved_selection(problem_id, lang, meta)
   return meta._selected_oracle or util.read_json(validation_path(problem_id, lang))
 end
@@ -656,14 +800,20 @@ local function resolve_source(problem_id, lang, meta, cases, cb, status)
     local trial_cases = #known > 0 and known or cases
     local trial_oracle = #known > 0 and "expected" or "reference"
     if status then
-      status(string.format("Validating %s %s candidate %d/%d on %d workers",
+      status(string.format("Validating %s %s candidate %d/%d %s · %d worker%s",
         candidate.provider or "local", candidate.stage, index - 1, #candidates,
-        parallelism(#trial_cases)))
+        sandbox_phrase(true), parallelism(#trial_cases),
+        parallelism(#trial_cases) == 1 and "" or "s"))
     end
     run_selected(problem_id, candidate.code, lang,
       trial_meta, trial_cases, function(report)
         if report.ok and report.total > 0 and report.passed == report.total then
           save_selection(problem_id, lang, meta, candidate, validation_key)
+          -- Seed per-case outputs from the validation run so the next user run
+          -- does not re-execute the oracle on cases it already saw.
+          local cache = load_oracle_cache(problem_id, lang, candidate)
+          absorb_oracle_actuals(cache, report)
+          persist_oracle_cache(problem_id, lang, cache)
           return cb(candidate, rejected)
         end
         if status then
@@ -678,6 +828,10 @@ local function resolve_source(problem_id, lang, meta, cases, cb, status)
 end
 
 --- Run `code` against `cases` locally.
+---
+--- Provider oracles execute separately (sandboxed) and their outputs are
+--- cached per case. Your solution then runs alone against those answers, so a
+--- re-run with unchanged cases never re-enters the sandbox for the oracle.
 function M.run(problem_id, code, lang, meta, cases, cb, status)
   if not M.SUPPORTED[lang] then
     return fail(cb, string.format("local runs are not supported for %s yet", lang), true)
@@ -690,22 +844,41 @@ function M.run(problem_id, code, lang, meta, cases, cb, status)
   end
 
   resolve_source(problem_id, lang, meta, cases, function(candidate)
-    local selected = vim.deepcopy(meta)
-    selected._oracle_code = candidate and candidate.code or nil
-    local harness_oracle = candidate and "reference" or "expected"
-    if status then
+    local function run_user(outputs)
+      local selected = vim.deepcopy(meta)
+      selected._oracle_code = nil
+      selected._oracle_outputs = outputs
       local workers = parallelism(#cases)
-      status((candidate
-        and string.format("Running with %s %s oracle", candidate.provider, candidate.stage)
-        or "Running with statement and learned answers (unknown outputs are N/A)")
-        .. string.format(" on %d worker%s", workers, workers == 1 and "" or "s"))
+      if status then
+        if candidate then
+          status(string.format(
+            "Running your code %s · %s %s oracle · %d worker%s",
+            sandbox_phrase(false), candidate.provider, candidate.stage,
+            workers, workers == 1 and "" or "s"))
+        else
+          status(string.format(
+            "Running your code %s · statement/learned answers · %d worker%s",
+            sandbox_phrase(false), workers, workers == 1 and "" or "s"))
+        end
+      end
+      run_selected(problem_id, code, lang, selected, cases, function(report)
+        report.oracle_stage = candidate and candidate.stage or "expected"
+        report.oracle_provider = candidate and candidate.provider or nil
+        report.oracle_id = candidate and candidate.id or nil
+        report.sandboxed = false
+        cb(report)
+      end, "expected")
     end
-    run_selected(problem_id, code, lang, selected, cases, function(report)
-      report.oracle_stage = candidate and candidate.stage or "expected"
-      report.oracle_provider = candidate and candidate.provider or nil
-      report.oracle_id = candidate and candidate.id or nil
-      cb(report)
-    end, harness_oracle)
+
+    if not candidate then
+      return run_user(nil)
+    end
+    ensure_oracle_outputs(problem_id, lang, meta, candidate, cases, function(err, outputs)
+      if err then
+        return fail(cb, err)
+      end
+      run_user(outputs)
+    end, status)
   end, status)
 end
 

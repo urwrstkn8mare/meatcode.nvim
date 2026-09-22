@@ -27,9 +27,9 @@ require("meatcode").setup({
 
   runner = {
     -- Provider reference/editorial/community code is remote and untrusted.
-    -- true requires bubblewrap on Linux / sandbox-exec on macOS and fails
-    -- closed when it is unavailable. false executes that code with your
-    -- normal user permissions.
+    -- true sandboxes oracle validation/output caching (bwrap / sandbox-exec)
+    -- and fails closed when unavailable. Your solution runs separately,
+    -- unsandboxed. false executes provider code with your user permissions.
     sandbox = true,
     -- Independent cases use separate processes. 0 = auto (up to CPU count),
     -- 1 = sequential, N = at most N concurrent workers.

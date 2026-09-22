@@ -142,11 +142,18 @@ is named when the harness had got far enough to start one.
 
 ## Running provider code safely
 
-Reference, editorial and community implementations are remote code. With the
-default `runner.sandbox = true`, both Python execution and C++ compilation/
-execution run isolated from the network, the home directory/repository and the
+Reference, editorial and community implementations are remote code. They never
+share a process with your solution. With the default `runner.sandbox = true`,
+oracle validation and any first-time computation of an oracle's output for a
+test case run isolated from the network, the home directory/repository and the
 rest of the host filesystem, with only the per-run scratch directory writable.
-On Linux that means fresh user, PID, network, IPC and mount namespaces via
+Those outputs are cached per problem, language and exact input under
+`stdpath("cache")/meatcode/oracle-outputs/`, so a re-run only sandboxes the
+oracle again for cases you added or edited. Your own code then runs alone,
+outside the sandbox, against the cached answers. Status messages on each local
+run say which half used a sandbox.
+
+On Linux isolation means fresh user, PID, network, IPC and mount namespaces via
 bubblewrap (`bwrap`), exposing `/usr`, the dynamic loader cache and minimal
 `/dev` read-only. On macOS `sandbox-exec` applies a Seatbelt profile with the
 same scope; macOS has no PID namespace, so the host process table stays
