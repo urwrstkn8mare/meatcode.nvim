@@ -79,6 +79,19 @@ function M.available(problem, name)
   return M.id(problem, name) ~= nil
 end
 
+--- Providers from `slot`'s chain that could serve `problem`. LintCode stays a
+--- candidate whenever LeetCode is present, since its id resolves on demand.
+function M.candidates(problem, slot)
+  local out = {}
+  for _, name in ipairs(M.order(slot)) do
+    if M.available(problem, name)
+      or (name == "lintcode" and M.available(problem, "leetcode")) then
+      table.insert(out, name)
+    end
+  end
+  return out
+end
+
 function M.problem_key(problem)
   if type(problem) == "table" and type(problem.key) == "string" then return problem.key end
   for _, name in ipairs(M.NAMES) do

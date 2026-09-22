@@ -148,18 +148,19 @@ end
 
 local function render_ready(s)
   local keys = config.options.keys.problem
-  local backend = providers.get(s.provider)
+  local submit_backend = providers.get(s.submit_provider)
   local local_note = providers.available(s.problem, "neetcode") and s.meta.referenceSolution
     and "Local runs diff your output against NeetCode's reference solution."
     or "No local oracle is available; submit to run the hidden suite."
   local entries = {
     { keys.run, "run local tests" },
-    { keys.submit, "submit to " .. backend.label },
+    { keys.submit, "submit to " .. submit_backend.label },
     { keys.tests, "edit test cases" },
     { keys.test_failed, "add failed submission case" },
     { keys.reset, "reset to starter code" },
     { keys.links, "open a problem link" },
-    { keys.switch_provider, "switch provider" },
+    { keys.configure, "configure provider chains" },
+    { keys.switch_provider, "switch content provider" },
   }
   local key_width, label_width = 0, 0
   for _, entry in ipairs(entries) do
@@ -348,6 +349,20 @@ local function render_description(s)
   render_images(s)
 end
 
+--- Re-resolve every open session's judge after a chain edit. Content is left
+--- alone: switching the statement mid-solve would orphan the WIP solution.
+function M.refresh_chains()
+  for _, s in pairs(sessions) do
+    if session_alive(s) then
+      local chain = providers.candidates(s.problem, "submit")
+      s.submit_provider = chain[1] or s.content_provider
+      if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+        pcall(render_ready, s)
+      end
+    end
+  end
+end
+
 function M.tests()
   local s = ready()
   if s then tests.open(s.path, s.meta.custom_test_cases) end
@@ -400,9 +415,13 @@ function M.submit()
   local s = ready()
   if not s then return end
   if s.busy then return util.notify("already running") end
+  if not providers.available(s.problem, s.submit_provider)
+    and not (s.submit_provider == "lintcode" and providers.available(s.problem, "leetcode")) then
+    return util.err("this problem is unavailable on " .. providers.get(s.submit_provider).label)
+  end
   save(s)
 
-  local backend = providers.get(s.provider)
+  local backend = providers.get(s.submit_provider)
   s.busy = true
   results.running(s.res_buf, "Submitting to " .. backend.label)
 
@@ -463,7 +482,7 @@ function M.reset()
   if local_err then return util.err(local_err) end
   s.failed_input = nil
 
-  local backend = providers.get(s.provider)
+  local backend = providers.get(s.content_provider)
   if not backend.save_code then
     render_ready(s)
     return util.notify(s.problem.name .. " reset locally; completion count is unchanged")
@@ -487,7 +506,7 @@ end
 function M.push()
   local s = current_session()
   if not s then return util.err("no problem is open — use :MeatCode to pick one") end
-  local backend = providers.get(s.provider)
+  local backend = providers.get(s.content_provider)
   if not backend.save_code then return util.err(backend.label .. " does not expose saved editor code") end
   save(s)
   backend.save_code(s.problem, s.lang, current_code(s), function(err)
@@ -654,8 +673,8 @@ local function activate(s)
   pcall(vim.api.nvim_win_set_cursor, s.desc_win, { row + 1, 0 })
 end
 
---- Reopen with a specific provider. The on-disk solution is shared and is not
---- replaced merely because the statement source changed.
+--- Reopen with a specific content provider. The on-disk solution is shared and
+--- is not replaced merely because the statement source changed.
 function M.switch(provider)
   local s = ready()
   if not s then return end
@@ -670,7 +689,7 @@ function M.toggle_provider()
   local order = providers.order("content")
   local current = 0
   for i, name in ipairs(order) do
-    if name == s.provider then current = i end
+    if name == s.content_provider then current = i end
   end
   for offset = 1, #order do
     local name = order[((current + offset - 1) % #order) + 1]
@@ -685,15 +704,11 @@ end
 function M.links()
   local s = ready()
   if not s then return end
-  local links = providers.links(s.problem)
-  if #links == 0 then return util.err("this problem has no links") end
-  if #links == 1 then return vim.ui.open(links[1].url) end
-  vim.ui.select(links, {
-    prompt = "Open link:",
-    format_item = function(link) return link.label end,
-  }, function(choice)
-    if choice then vim.ui.open(choice.url) end
-  end)
+  require("meatcode.ui.links").open(s.problem)
+end
+
+function M.configure()
+  require("meatcode.ui.chains").open()
 end
 
 local function keymaps(s)
@@ -708,6 +723,7 @@ local function keymaps(s)
     map(keys.test_failed, M.test_failed, "MeatCode: add failed submission case")
     map(keys.reset, M.reset, "MeatCode: reset to starter code")
     map(keys.links, M.links, "MeatCode: open a problem link")
+    map(keys.configure, M.configure, "MeatCode: configure provider chains")
     map(keys.switch_provider, M.toggle_provider, "MeatCode: switch problem provider")
     -- A problem tab is one unit: closing a split closes the tab.
     map("<C-w>c", function() M.close(s) end, "MeatCode: close problem")
@@ -944,7 +960,7 @@ local function seed_file(s, path, cb)
   if s.lang == "cpp" then ensure_clangd(util.slug(providers.filename(s.problem)), starter) end
   if vim.uv.fs_stat(path) then return cb() end
 
-  local backend = providers.get(s.provider)
+  local backend = providers.get(s.content_provider)
   if not backend.saved_code then
     util.write_file(path, starter)
     return vim.schedule(cb)
@@ -1011,14 +1027,7 @@ end
 
 local function initial_candidates(problem, forced)
   if forced then return { forced } end
-  local out = {}
-  for _, name in ipairs(providers.order("content")) do
-    if providers.available(problem, name)
-      or (name == "lintcode" and providers.available(problem, "leetcode")) then
-      table.insert(out, name)
-    end
-  end
-  return out
+  return providers.candidates(problem, "content")
 end
 
 ---@param problem table catalog entry
@@ -1083,9 +1092,11 @@ function M.open(problem, opts)
         end
 
         local selected = vim.deepcopy(problem)
+        local submit_chain = providers.candidates(selected, "submit")
         local s = {
           problem = selected,
-          provider = provider,
+          content_provider = provider,
+          submit_provider = submit_chain[1] or provider,
           meta = meta,
           sections = description.sections(meta.description),
           lang = lang,
