@@ -103,8 +103,9 @@ function M.list(query)
   require("meatcode.ui.list").open(query)
 end
 
-local function open_problem(problem)
+local function open_problem(problem, source)
   vim.schedule(function()
+    if source then util.notify(source) end
     require("meatcode.ui.problem").open(problem)
   end)
 end
@@ -135,7 +136,13 @@ function M.random()
     if #choices == 0 then
       return vim.schedule(function() util.err("no accessible problems found") end)
     end
-    open_problem(choices[math.random(#choices)])
+    local pick = choices[math.random(#choices)]
+    local labels = {}
+    for _, name in ipairs(providers.NAMES) do
+      if providers.available(pick, name) then table.insert(labels, providers.get(name).label) end
+    end
+    open_problem(pick, string.format("random from merged catalog · %s (%s)",
+      pick.name, table.concat(labels, "/")))
   end)
 end
 
@@ -165,7 +172,7 @@ function M.daily()
         topics = {},
         companies = {},
       }
-      open_problem(problem)
+      open_problem(problem, "LeetCode problem of the day · " .. problem.name)
     end)
   end)
 end

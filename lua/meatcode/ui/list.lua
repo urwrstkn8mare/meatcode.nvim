@@ -1,11 +1,12 @@
 local catalog = require("meatcode.catalog.problems")
+local pages = require("meatcode.ui.pages")
 local progress = require("meatcode.progress")
 local providers = require("meatcode.providers")
 local util = require("meatcode.util")
 
 local M = {}
 
-local state = { picker = nil, prompt_buf = nil, subscribed = false }
+local state = { picker = nil, prompt_buf = nil, subscribed = false, from_home = false }
 
 local function streak_text()
   local provider = providers.get("leetcode")
@@ -120,7 +121,7 @@ local function open_picker(query)
 
   state.picker = modules["telescope.pickers"].new({}, {
     prompt_title = title(),
-    results_title = " <CR> solve · <C-o> browser · :MeatCode random · :MeatCode daily ",
+    results_title = " <CR> solve · <C-o> browser · q back ",
     finder = entries(modules),
     sorter = modules["telescope.config"].values.generic_sorter({}),
     previewer = false,
@@ -128,7 +129,7 @@ local function open_picker(query)
     initial_mode = "insert",
     sorting_strategy = "ascending",
     layout_strategy = "vertical",
-    layout_config = { width = 0.98, height = 0.95, prompt_position = "top" },
+    layout_config = { width = 9999, height = 9999, prompt_position = "top" },
     attach_mappings = function(prompt_buf, map)
       state.prompt_buf = prompt_buf
       actions.select_default:replace(function()
@@ -136,6 +137,7 @@ local function open_picker(query)
         if not selected then return end
         actions.close(prompt_buf)
         state.prompt_buf, state.picker = nil, nil
+        pages.clear()
         require("meatcode.ui.problem").open(selected.value)
       end)
       local function open_browser()
@@ -143,8 +145,15 @@ local function open_picker(query)
         if not selected then return end
         require("meatcode.ui.links").open(selected.value)
       end
+      local function back()
+        actions.close(prompt_buf)
+        state.prompt_buf, state.picker = nil, nil
+      end
       map("i", "<C-o>", open_browser)
       map("n", "o", open_browser)
+      map("i", "<Esc>", back)
+      map("n", "q", back)
+      map("n", "<Esc>", back)
       return true
     end,
   })

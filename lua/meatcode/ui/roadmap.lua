@@ -3,8 +3,8 @@ local config = require("meatcode.config")
 local dag = require("meatcode.ui.dag")
 local graph = require("meatcode.catalog.graph")
 local hl = require("meatcode.ui.highlight")
+local pages = require("meatcode.ui.pages")
 local progress = require("meatcode.progress")
-local tabs = require("meatcode.ui.tab")
 local util = require("meatcode.util")
 
 --- The roadmap screen: an ASCII rendering of the NeetCode topic DAG with per
@@ -14,15 +14,14 @@ local M = {}
 local HIDDEN_CURSOR = "a:MeatCodeHiddenCursor"
 
 local state = {
-  buf = nil, win = nil, tab = nil, selected = nil, layout = nil, subscribed = false,
+  buf = nil, selected = nil, layout = nil, subscribed = false,
   guicursor = nil,
 }
 
 local hide_token = 0
 
 local function is_open()
-  return state.win and vim.api.nvim_win_is_valid(state.win)
-    and state.buf and vim.api.nvim_buf_is_valid(state.buf)
+  return state.buf and vim.api.nvim_buf_is_valid(state.buf) and pages.buf() == state.buf
 end
 
 --- The roadmap is navigated by moving a highlighted node, so the terminal
@@ -35,7 +34,7 @@ local function hide_cursor()
   if not config.options.ui.hide_cursor then
     return
   end
-  if not is_open() or vim.api.nvim_get_current_win() ~= state.win then
+  if not is_open() or vim.api.nvim_get_current_buf() ~= state.buf then
     return
   end
   vim.api.nvim_set_hl(0, "MeatCodeHiddenCursor", { blend = 100, nocombine = true })
@@ -56,7 +55,7 @@ local function hide_cursor()
       if token ~= hide_token then
         return
       end
-      if is_open() and vim.api.nvim_get_current_win() == state.win then
+      if is_open() and vim.api.nvim_get_current_buf() == state.buf then
         pcall(vim.api.nvim_ui_send, "\27[?25l")
       end
     end)
@@ -98,7 +97,7 @@ local function render()
     return
   end
 
-  local width = vim.api.nvim_win_get_width(state.win)
+  local width = vim.api.nvim_win_get_width(0)
 
   -- First run: there is no catalog yet. Say so rather than drawing a roadmap
   -- of empty progress bars; the update listener re-renders when it arrives.
@@ -151,7 +150,7 @@ local function render()
   local pos = layout.positions[state.selected]
   if pos then
     local row = pos.row + HEADER_ROWS + 2
-    pcall(vim.api.nvim_win_set_cursor, state.win, { math.min(row, #lines), math.max(pos.col, 0) })
+    pcall(vim.api.nvim_win_set_cursor, 0, { math.min(row, #lines), math.max(pos.col, 0) })
   end
   hide_cursor()
 end
@@ -215,13 +214,13 @@ end
 function M.close()
   show_cursor()
   pcall(vim.api.nvim_del_augroup_by_name, "MeatCodeRoadmapCursor")
-  if state.tab then
-    tabs.clear(state.tab)
-  end
-  if is_open() then
-    pcall(vim.api.nvim_win_close, state.win, true)
-  end
-  state.win, state.buf, state.tab = nil, nil, nil
+  if state.buf and pages.buf() == state.buf then pages.pop() end
+  state.buf = nil
+end
+
+--- q/<Esc> on the roadmap goes back to the previous page.
+local function back()
+  M.close()
 end
 
 local function cursor_autocmds()
@@ -233,26 +232,21 @@ local function cursor_autocmds()
     group = group, buffer = state.buf, callback = show_cursor,
   })
   vim.api.nvim_create_autocmd("VimLeavePre", { group = group, callback = show_cursor })
-  -- The float dies with its tab (e.g. a problem tab closing). Restore the
-  -- cursor and drop stale handles so the next :MeatCode can reopen cleanly.
-  vim.api.nvim_create_autocmd("WinClosed", {
+  -- The page dies with its buffer. Restore the cursor and drop stale handles
+  -- so the next open starts cleanly.
+  vim.api.nvim_create_autocmd("BufWipeout", {
     group = group,
-    callback = function(ev)
-      if tonumber(ev.match) ~= state.win then
-        return
-      end
+    buffer = state.buf,
+    callback = function()
       show_cursor()
-      if state.tab then
-        tabs.clear(state.tab)
-      end
-      state.win, state.buf, state.tab = nil, nil, nil
+      state.buf = nil
     end,
   })
   -- CmdlineEnter's pattern is the cmdline type, so these are not buffer-local.
   vim.api.nvim_create_autocmd("CmdlineEnter", {
     group = group,
     callback = function()
-      if is_open() and vim.api.nvim_get_current_win() == state.win then
+      if is_open() and vim.api.nvim_get_current_buf() == state.buf then
         show_cursor()
       end
     end,
@@ -284,8 +278,8 @@ local function keymaps()
 
   map(keys.cycle_list, function() cycle_list(1) end, "next problem list")
   map("H", function() cycle_list(-1) end, "previous problem list")
-  map(keys.quit, M.close, "close")
-  map("<Esc>", M.close, "close")
+  map(keys.quit, back, "back")
+  map("<Esc>", back, "back")
 
 
   map("?", function()
@@ -293,45 +287,25 @@ local function keymaps()
       "hjkl / arrows  move between topics",
       keys.open .. "             open the selected topic",
       keys.cycle_list .. " / H          switch problem list",
-      keys.quit .. "              close",
+      keys.quit .. "              back",
     }, "\n"))
   end, "help")
 end
 
 function M.open()
-  if is_open() then
-    vim.api.nvim_set_current_win(state.win)
-    hide_cursor()
-    return
-  end
+  if is_open() then return end
 
   catalog.load()
   progress.load()
   state.selected = state.selected or "Arrays & Hashing"
 
-  state.tab = vim.api.nvim_get_current_tabpage()
   state.buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[state.buf].bufhidden = "wipe"
+  vim.bo[state.buf].bufhidden = "hide"
   vim.bo[state.buf].filetype = "meatcode-roadmap"
-  tabs.name_buffer(state.buf, "roadmap")
-  tabs.set(state.tab, "roadmap")
+  pages.push({ id = "roadmap", buf = state.buf, title = "roadmap", on_show = render })
 
-  local width = math.min(vim.o.columns - 4, 130)
-  local height = vim.o.lines - 6
-  state.win = vim.api.nvim_open_win(state.buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    row = math.floor((vim.o.lines - height) / 2) - 1,
-    col = math.floor((vim.o.columns - width) / 2),
-    style = "minimal",
-    border = config.options.ui.border,
-    title = " NeetCode Roadmap ",
-    title_pos = "center",
-  })
-
-  vim.wo[state.win].wrap = false
-  vim.wo[state.win].cursorline = false
+  vim.wo[0].wrap = false
+  vim.wo[0].cursorline = false
   vim.bo[state.buf].modifiable = false
 
   keymaps()

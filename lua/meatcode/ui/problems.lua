@@ -1,26 +1,22 @@
 local catalog = require("meatcode.catalog")
 local config = require("meatcode.config")
 local hl = require("meatcode.ui.highlight")
+local pages = require("meatcode.ui.pages")
 local progress = require("meatcode.progress")
-local tabs = require("meatcode.ui.tab")
 local util = require("meatcode.util")
-local providers = require("meatcode.providers")
 
---- Problem list for a single roadmap topic.
+--- Problem list for a single roadmap topic, as a full page on the nav stack.
 local M = {}
 
-local state = { buf = nil, win = nil, rows = {}, pattern = nil, list = nil, subscribed = false }
+local state = { buf = nil, rows = {}, pattern = nil, list = nil, subscribed = false }
 
 local function is_open()
-  return state.win and vim.api.nvim_win_is_valid(state.win)
-    and state.buf and vim.api.nvim_buf_is_valid(state.buf)
+  return state.buf and vim.api.nvim_buf_is_valid(state.buf) and pages.buf() == state.buf
 end
 
 function M.close()
-  if is_open() then
-    pcall(vim.api.nvim_win_close, state.win, true)
-  end
-  state.win, state.buf = nil, nil
+  if state.buf and pages.buf() == state.buf then pages.pop() end
+  state.buf = nil
 end
 
 local function render()
@@ -78,7 +74,7 @@ local function current()
   if not is_open() then
     return nil
   end
-  local row = vim.api.nvim_win_get_cursor(state.win)[1]
+  local row = vim.api.nvim_win_get_cursor(0)[1]
   return state.rows[row - 2]
 end
 
@@ -96,8 +92,8 @@ local function keymaps()
     require("meatcode.ui.problem").open(p)
   end, "open problem")
 
-  map("q", M.close, "close")
-  map("<Esc>", M.close, "close")
+  map("q", M.close, "back")
+  map("<Esc>", M.close, "back")
 
 
   map("o", function()
@@ -116,41 +112,19 @@ function M.open(pattern, list)
   state.list = list or config.options.list
 
   if is_open() then
-    tabs.name_buffer(state.buf, pattern)
     render()
     return
   end
 
   state.buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[state.buf].bufhidden = "wipe"
+  vim.bo[state.buf].bufhidden = "hide"
   vim.bo[state.buf].filetype = "meatcode-roadmap-problems"
-  tabs.name_buffer(state.buf, pattern)
-
-  local width = math.min(vim.o.columns - 8, 92)
-  local height = math.min(vim.o.lines - 8, 30)
-  state.win = vim.api.nvim_open_win(state.buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    row = math.floor((vim.o.lines - height) / 2) - 1,
-    col = math.floor((vim.o.columns - width) / 2),
-    style = "minimal",
-    border = config.options.ui.border,
-    title = " " .. pattern .. " ",
-    title_pos = "center",
-  })
-  vim.wo[state.win].cursorline = true
+  pages.push({ id = "problems", buf = state.buf, title = pattern, on_show = render })
+  vim.wo[0].cursorline = true
 
   keymaps()
   render()
-  pcall(vim.api.nvim_win_set_cursor, state.win, { 3, 0 })
-  vim.api.nvim_create_autocmd("WinClosed", {
-    pattern = tostring(state.win),
-    once = true,
-    callback = function()
-      state.win, state.buf = nil, nil
-    end,
-  })
+  pcall(vim.api.nvim_win_set_cursor, 0, { 3, 0 })
   if not state.subscribed then
     state.subscribed = true
     progress.on_update(function()
