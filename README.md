@@ -67,12 +67,13 @@ account with whichever provider you submit to.
 | --- | --- |
 | `:MeatCode login leetcode` | the full `Cookie` request header from a signed-in `leetcode.com` tab (it must contain `LEETCODE_SESSION` and `csrftoken`) |
 | `:MeatCode login neetcode` | NeetCode's Firebase refresh token, out of browser storage |
-| `:MeatCode login lintcode` | the full `Cookie` request header from a signed-in `www.lintcode.com` tab |
+| `:MeatCode login lintcode` | LintCode's refresh token — a console script prints it; access tokens are minted from it as needed |
 
 All three commands walk you through getting the value. Credentials are written with
 `0600` permissions under `stdpath("cache")/meatcode` and are only ever sent to
 the service they belong to. `:MeatCode logout <provider>` deletes one; `:MeatCode`
-opens the homepage, which shows where you stand.
+opens the homepage, which shows where you stand — press `<CR>` on a status row
+there to log that provider in or out.
 
 ## Usage
 

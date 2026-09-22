@@ -15,7 +15,7 @@ Almost everything is one JSON API host:
 ```
 GET https://apiv1.lintcode.com/...
 Accept: application/json
-Cookie: <the full browser cookie>     # only for authenticated calls
+Authorization: Bearer <jwt>           # only for authenticated calls
 ```
 
 Authenticated POSTs also send `Content-Type`, `Origin`, and `Referer`. Keep
@@ -30,11 +30,28 @@ Envelope:
 
 ## Authentication
 
-Session cookie only. The plugin asks for the complete `Cookie` request header
-from a signed-in `www.lintcode.com` tab and stores it verbatim. A `csrftoken`
-or `csrf` value inside it is echoed back as `X-CSRFToken`.
+Two JWTs. The web client keeps a week-long refresh token in `localStorage`
+under `@JWT:REFRESH_TOKEN` and trades it for an access token that lives about
+500 seconds; only the access token goes out as `Authorization: Bearer <jwt>`.
+The plugin therefore stores the *refresh* token — its login page ships a
+console script that scans `localStorage`/`sessionStorage`/cookies for JWTs and
+prints the one whose payload says `"token_type": "refresh"` — and mints access
+tokens on demand:
 
-The cookie is validated once at login with:
+```
+POST https://apiv1.lintcode.com/v2/api/token-refresh/
+{"refresh": "<jwt>"}
+-> {"data": {"access": "<jwt>", "access_lifetime": 500}}
+```
+
+A rotated `refresh` in that response replaces the stored one. Access tokens are
+re-minted 30 seconds before `exp`, and concurrent callers share one in-flight
+refresh. A pasted header block, a bare `Bearer ...` value, or a bare `eyJ...`
+token are all accepted at login; a `Cookie` header pasted alongside is stored
+and replayed too, with a `csrftoken`/`csrf` value inside it echoed back as
+`X-CSRFToken`. The cookie alone does not authenticate.
+
+The credential is validated once at login with:
 
 ```
 GET https://apiv1.lintcode.com/new/api/accounts/profile/

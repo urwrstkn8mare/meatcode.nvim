@@ -34,6 +34,34 @@ local TOKEN_SNIPPET = [[
 
 ]]
 
+--- Snippet the user runs in their browser console on lintcode.com. The access
+--- token in `Authorization` headers lives for about eight minutes, so what is
+--- wanted is the week-long refresh token (localStorage `@JWT:REFRESH_TOKEN`);
+--- the plugin mints access tokens from it. Every JWT in web storage is
+--- inspected rather than trusting one key name, and `token_type` in the
+--- payload decides which one is the refresh token.
+local LINTCODE_SNIPPET = [[
+(() => {
+  const re = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
+  const found = new Set();
+  const scan = v => { if (typeof v === 'string') for (const m of v.matchAll(re)) found.add(m[0]); };
+  for (const store of [localStorage, sessionStorage]) {
+    for (const k of Object.keys(store)) {
+      const v = store.getItem(k);
+      scan(v);
+      try { JSON.parse(v, (_, x) => (scan(x), x)); } catch (e) {}
+    }
+  }
+  scan(document.cookie);
+  const claims = t => { try { return JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); } catch (e) { return {}; } };
+  const now = Date.now() / 1000;
+  const fresh = [...found].filter(t => (claims(t).exp || 0) > now);
+  const t = fresh.find(t => claims(t).token_type === 'refresh') || fresh[0];
+  console.log(t ? 'Bearer ' + t : 'NOT FOUND - sign in on this tab, reload, and rerun');
+})()
+
+]]
+
 function M.home()
   require("meatcode.ui.home").open()
 end
@@ -67,12 +95,53 @@ function M.login(provider, credential)
 
   if credential and credential ~= "" then return finish(credential) end
   local login_ui = require("meatcode.ui.login")
-  if provider == "neetcode" then return login_ui.open(TOKEN_SNIPPET, finish) end
-  local required = provider == "leetcode"
-    and "The cookie must contain both LEETCODE_SESSION and csrftoken."
-    or "Copy the complete header; LintCode may use more than one session cookie."
-  local host = provider == "leetcode" and "leetcode.com" or "www.lintcode.com"
-  login_ui.open_cookie(provider, backend.label, host, required, finish)
+  if provider == "neetcode" then
+    return login_ui.open({
+      label = backend.label,
+      steps = {
+        "Open https://neetcode.io and sign in.",
+        "In browser DevTools, open Application (Chrome) or Storage (Firefox).",
+        "Open IndexedDB > firebaseLocalStorageDb > firebaseLocalStorage.",
+        "Expand the auth user value > stsTokenManager > refreshToken.",
+        "Copy the refreshToken value (without quotes), then press p to paste it.",
+      },
+      alternative = {
+        "Alternative: press y to copy the script below, then run it in the",
+        "browser console on neetcode.io and paste the token it prints.",
+      },
+      prompt = "NeetCode refresh token: ",
+      snippet = TOKEN_SNIPPET,
+      finish = finish,
+    })
+  end
+  if provider == "lintcode" then
+    return login_ui.open({
+      label = backend.label,
+      steps = {
+        "Open https://www.lintcode.com and sign in.",
+        "Open the browser console (DevTools > Console).",
+        "Press y here to copy the script below, then run it in that console.",
+        "Copy the `Bearer eyJ...` line it prints (a week-long refresh token).",
+        "Return here and press p to paste it.",
+      },
+      alternative = {
+        "By hand instead: DevTools > Application > Local Storage and copy the",
+        "@JWT:REFRESH_TOKEN value. The Authorization header off a network",
+        "request also works, but that access token expires in minutes.",
+      },
+      prompt = "LintCode token: ",
+      snippet = LINTCODE_SNIPPET,
+      finish = finish,
+    })
+  end
+  login_ui.open_header("leetcode", backend.label, {
+    "Open https://leetcode.com and sign in.",
+    "Open browser DevTools > Network, then reload the page.",
+    "Select a request to leetcode.com.",
+    "Under Request Headers, copy the complete Cookie header value.",
+    "Return here and press p to paste it.",
+  }, "LeetCode Cookie header: ",
+    "The cookie must contain both LEETCODE_SESSION and csrftoken.", finish)
 end
 
 function M.logout(provider)

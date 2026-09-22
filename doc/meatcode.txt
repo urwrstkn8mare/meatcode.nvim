@@ -50,11 +50,15 @@ csrftoken.
 Run `:MeatCode login neetcode` to see how to extract NeetCode's Firebase refresh
 token from browser storage.
 
-Run `:MeatCode login lintcode` to copy the complete Cookie request header from a
-signed-in www.lintcode.com tab.
+Run `:MeatCode login lintcode` for a console script that prints your LintCode
+refresh token from a signed-in www.lintcode.com tab; press y to copy the
+script, p to paste what it prints. The plugin mints short-lived access tokens
+from it, so the session survives longer than the few minutes an Authorization
+header copied out of DevTools would last.
 
 All credentials are written below `stdpath("cache")/meatcode` with mode 0600.
-Use `:MeatCode logout <provider>` to remove one.
+Use `:MeatCode logout <provider>` to remove one, or press <CR> on a status row
+of the homepage to log that provider in or out.
 
 ==============================================================================
 4. COMMANDS                                             *meatcode-commands*
@@ -99,7 +103,8 @@ Problem list ~
 
 Homepage ~
   r / l / n / d         Open roadmap / finder / random / daily
-  <CR>                  Open the row under the cursor
+  <CR>                  Open the row under the cursor; on a provider status
+                        row, log that provider in or out
   q                     Close
 
 Problem finder ~

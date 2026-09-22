@@ -1,20 +1,20 @@
 local M = {}
 
-function M.open(snippet, finish)
+--- Script-assisted login. `opts` = { label, steps, alternative, prompt,
+--- snippet, finish }: numbered `steps` for the manual route, `alternative`
+--- lines describing the console script, and the `snippet` itself.
+function M.open(opts)
   local buf = vim.api.nvim_create_buf(false, true)
-  local lines = {
-    "NeetCode login", "",
-    "1. Open https://neetcode.io and sign in.",
-    "2. In browser DevTools, open Application (Chrome) or Storage (Firefox).",
-    "3. Open IndexedDB > firebaseLocalStorageDb > firebaseLocalStorage.",
-    "4. Expand the auth user value > stsTokenManager > refreshToken.",
-    "5. Copy the refreshToken value (without quotes).",
-    "6. Return here and press p to paste the token into the login prompt.", "",
-    "Alternative: press y to copy the script below, then run it in the",
-    "browser console on neetcode.io and copy the token it prints.", "",
-    "y: copy script   p: enter token   q: close", "",
-  }
-  vim.list_extend(lines, vim.split(vim.trim(snippet), "\n", { plain = true }))
+  local snippet = vim.trim(opts.snippet)
+  local finish = opts.finish
+  local lines = { opts.label .. " login", "" }
+  for i, step in ipairs(opts.steps) do
+    table.insert(lines, i .. ". " .. step)
+  end
+  table.insert(lines, "")
+  vim.list_extend(lines, opts.alternative or {})
+  vim.list_extend(lines, { "", "y: copy script   p: paste value   q: close", "" })
+  vim.list_extend(lines, vim.split(snippet, "\n", { plain = true }))
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
   vim.bo[buf].bufhidden = "wipe"
@@ -41,27 +41,26 @@ function M.open(snippet, finish)
     end
   end, { buffer = buf, desc = "Copy login script" })
   vim.keymap.set("n", "p", function()
-    vim.ui.input({ prompt = "NeetCode refresh token: " }, function(input)
+    vim.ui.input({ prompt = opts.prompt }, function(input)
       if input and vim.trim(input) ~= "" then
         close()
         finish(vim.trim(input))
       end
     end)
-  end, { buffer = buf, desc = "Enter login token" })
+  end, { buffer = buf, desc = "Enter login credential" })
 end
 
-function M.open_cookie(provider, label, host, required, finish)
+--- Header-paste login. `steps` are the numbered instructions, `prompt` labels
+--- the input, `required` is an optional trailing caveat.
+function M.open_header(provider, label, steps, prompt, required, finish)
   local buf = vim.api.nvim_create_buf(false, true)
-  local lines = {
-    label .. " login", "",
-    "1. Open https://" .. host .. " and sign in.",
-    "2. Open browser DevTools > Network, then reload the page.",
-    "3. Select a request to " .. host .. ".",
-    "4. Under Request Headers, copy the complete Cookie header value.",
-    "5. Return here and press p to paste it.", "",
-  }
+  local lines = { label .. " login", "" }
+  for i, step in ipairs(steps) do
+    table.insert(lines, i .. ". " .. step)
+  end
+  table.insert(lines, "")
   if required then table.insert(lines, required) end
-  vim.list_extend(lines, { "", "p: enter cookie   q: close" })
+  vim.list_extend(lines, { "", "p: paste value   q: close" })
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
   vim.bo[buf].bufhidden = "wipe"
@@ -78,13 +77,13 @@ function M.open_cookie(provider, label, host, required, finish)
   end
   vim.keymap.set("n", "q", close, { buffer = buf })
   vim.keymap.set("n", "p", function()
-    vim.ui.input({ prompt = label .. " Cookie header: " }, function(input)
+    vim.ui.input({ prompt = prompt }, function(input)
       if input and vim.trim(input) ~= "" then
         close()
         finish(vim.trim(input))
       end
     end)
-  end, { buffer = buf, desc = "Enter " .. provider .. " cookie" })
+  end, { buffer = buf, desc = "Enter " .. provider .. " credential" })
 end
 
 return M

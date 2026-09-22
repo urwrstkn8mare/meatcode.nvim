@@ -37,14 +37,23 @@ local function decode(name, cb)
   end
 end
 
+--- Authenticated requests mint a fresh access token first; anonymous browsing
+--- still works when there are no credentials at all.
 local function request(name, opts, cb)
-  opts.headers = vim.tbl_extend("force", auth.headers(), opts.headers or {})
-  if opts.method == "POST" then
-    opts.headers["Content-Type"] = "application/json"
-    opts.headers["Origin"] = "https://www.lintcode.com"
-    opts.headers["Referer"] = "https://www.lintcode.com/"
+  local function send(headers)
+    opts.headers = vim.tbl_extend("force", headers, opts.headers or {})
+    if opts.method == "POST" then
+      opts.headers["Content-Type"] = "application/json"
+      opts.headers["Origin"] = "https://www.lintcode.com"
+      opts.headers["Referer"] = "https://www.lintcode.com/"
+    end
+    client.request(opts, decode(name, cb))
   end
-  client.request(opts, decode(name, cb))
+  if not auth.is_logged_in() then return send(auth.headers()) end
+  auth.with_headers(function(err, headers)
+    if err then return cb(err, nil) end
+    send(headers)
+  end)
 end
 
 function M.lang(lang)
