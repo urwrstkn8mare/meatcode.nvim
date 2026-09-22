@@ -1,6 +1,7 @@
 local config = require("meatcode.config")
 local cpp = require("meatcode.runner.cpp")
 local ops = require("meatcode.runner.ops")
+local providers = require("meatcode.providers")
 local util = require("meatcode.util")
 
 --- Runs a solution against visible cases. Oracle precedence is stage-major:
@@ -30,6 +31,62 @@ function M.oracle(meta, lang)
   if type(ref) == "string" and ref ~= "" then return "reference" end
   local starter = type(meta.starterCode) == "table" and meta.starterCode[lang] or nil
   return type(starter) == "string" and starter ~= "" and "expected" or nil
+end
+
+local STAGE_LABEL = {
+  reference = "reference solution",
+  editorial = "official editorial",
+  community = "community solution",
+  expected = "statement/learned answers",
+}
+
+--- Human description of one oracle: stage, provider, and — for a community
+--- post — which specific one, when that much is known.
+---@param stage string
+---@param provider string|nil
+---@param extra {title: string|nil, votes: number|nil}|nil
+local function describe(stage, provider, extra)
+  if stage == "expected" or not provider then
+    return STAGE_LABEL[stage] or stage
+  end
+  local out = STAGE_LABEL[stage] .. " from " .. providers.get(provider).label
+  if extra and stage == "community" then
+    if type(extra.title) == "string" and extra.title ~= "" then
+      local title = extra.title
+      if vim.fn.strdisplaywidth(title) > 50 then
+        title = vim.fn.strcharpart(title, 0, 47) .. "…"
+      end
+      out = out .. ' — "' .. title .. '"'
+    end
+    if type(extra.votes) == "number" and extra.votes > 0 then
+      out = out .. string.format(" (%d votes)", extra.votes)
+    end
+  end
+  return out
+end
+
+--- Best-guess oracle description before running anything: the top candidate
+--- for the strongest available stage. A community candidate must still pass
+--- its known-case validation at run time (see `resolve_source`), so this is
+--- a preview of what will likely be used, not a guarantee — a candidate that
+--- fails validation falls through to the next one silently.
+---@return string|nil
+function M.describe(meta, lang)
+  local stage = M.oracle(meta, lang)
+  if not stage then return nil end
+  if stage == "expected" then return describe("expected") end
+  local candidates = type(meta.oracle_candidates) == "table" and meta.oracle_candidates[stage] or nil
+  local top = type(candidates) == "table" and candidates[1] or nil
+  return describe(stage, top and top.provider, top)
+end
+
+--- Description of the oracle a finished run actually used.
+---@param result meatcode.RunResult
+---@return string|nil
+function M.describe_result(result)
+  if not result.oracle_stage then return nil end
+  return describe(result.oracle_stage, result.oracle_provider,
+    { title = result.oracle_title, votes = result.oracle_votes })
 end
 
 local function case_key(block)
@@ -841,6 +898,8 @@ function M.run(problem_id, code, lang, meta, cases, cb, status)
         report.oracle_stage = candidate and candidate.stage or "expected"
         report.oracle_provider = candidate and candidate.provider or nil
         report.oracle_id = candidate and candidate.id or nil
+        report.oracle_title = candidate and candidate.title or nil
+        report.oracle_votes = candidate and candidate.votes or nil
         cb(report)
       end, "expected")
     end

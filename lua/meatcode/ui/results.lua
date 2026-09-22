@@ -1,5 +1,6 @@
 local config = require("meatcode.config")
 local hl = require("meatcode.ui.highlight")
+local runner = require("meatcode.runner")
 
 --- Renders local run results and cloud submission verdicts into a panel buffer.
 local M = {}
@@ -51,10 +52,7 @@ function M.render_run(buf, result)
   local lines, spans = {}, {}
   push(lines, spans, "")
   if result.oracle_stage then
-    local source = result.oracle_stage == "expected" and "statement/learned answers"
-      or ((result.oracle_provider and (result.oracle_provider .. " ")) or "")
-        .. result.oracle_stage .. " solution"
-    push(lines, spans, "  Oracle: " .. source, "MeatCodeMuted")
+    push(lines, spans, "  Oracle: " .. (runner.describe_result(result) or result.oracle_stage), "MeatCodeMuted")
     push(lines, spans, "")
   end
 

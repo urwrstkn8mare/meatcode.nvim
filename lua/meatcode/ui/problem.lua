@@ -169,6 +169,8 @@ local function merge_oracles(base, metas, order, lang)
               provider = provider_name,
               code = code,
               id = type(value) == "table" and value.id or nil,
+              title = type(value) == "table" and value.title or nil,
+              votes = type(value) == "table" and value.votes or nil,
             })
           end
         end
@@ -257,7 +259,8 @@ local function render_ready(s)
   local submit_backend = providers.get(s.submit_provider)
   local oracle = runner.oracle(s.meta, s.lang)
   local local_note = oracle
-      and "Local oracle order: reference → editorial → community → statement answers."
+      and ("Local oracle: " .. runner.describe(s.meta, s.lang)
+        .. " — falls back through reference → editorial → community → statement if it fails validation.")
     or "No local starter is available; submit to run the hidden suite."
   local entries = {
     { keys.run, "run local tests" },
