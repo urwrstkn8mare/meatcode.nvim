@@ -120,7 +120,7 @@ the roadmap for the full set).
 ## TODO
 
 - Sorting and filtering in the problem list view
-- More languages (Java, Go, Rust, TypeScript)
+- More languages (i.e. Rust)
 - Notes per problem, kept beside the solution file
 - A solved/attempted filter in the finder, driven by the shared history
 
