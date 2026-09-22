@@ -18,10 +18,10 @@ Browse the NeetCode roadmap and the merged LeetCode/NeetCode/LintCode catalog,
 solve problems in real buffers, run matching NeetCode visible cases locally,
 and submit through the first provider in the submit chain that can open them.
 
-Local runs work because NeetCode exposes its own reference solution for every
-problem. Your code and the reference are executed over the same inputs and the
-outputs diffed, so no network round trip is needed to know whether you are
-right on the visible cases.
+Local runs resolve a stage-major oracle chain: provider reference solutions,
+official editorials, sanity-checked popular community solutions, then answers
+printed in statements or learned from a failed submission. The provider chain
+breaks ties inside each stage.
 
 Requires Neovim 0.10+, `curl`, and telescope.nvim. Local runs need `python3`
 and/or a C++ compiler.
@@ -118,7 +118,9 @@ Solving ~
   <leader>ns            Submit through the submit chain's judge
   <leader>nR            Reset to the content provider's starter code
   <leader>no            Fuzzy-pick a provider/solution/video link
-  <leader>nc            Reorder the content/submit fallback chains
+  <leader>nc            Reorder the content/submit fallback chains. The
+                        provider actually serving the open problem is marked
+                        with a caret, which is not always the topmost one.
   <CR> or <Tab>         Statement window: toggle the hint under the cursor, or
                         follow the link under it via |vim.ui.open()|.
   q                     Close the problem (statement/results windows)
@@ -129,8 +131,20 @@ already shows the position. Set `ui.hide_cursor = false` to keep it.
 ==============================================================================
 6. LOCAL TEST RUNS                                        *meatcode-runner*
 
-NeetCode keeps expected outputs on the server, so a local run gets them by
-executing the site's own reference solution over the same inputs and diffing.
+Opening a problem discovers and caches the available local oracles, reporting
+each statement/provider/editorial/community request as it happens. Selection is
+stage-major: reference solution, official editorial, popular community
+solution, then statement/judge-learned answers. Provider fallback order only
+breaks ties inside one stage, so a NeetCode reference beats a preferred
+LeetCode editorial.
+
+Community candidates are ordered by LeetCode votes or LintCode likes and must
+pass every visible case with a known answer. A failure advances to the next
+candidate. Reference/editorial/community sources judge arbitrary custom inputs.
+Under answer-only fallback, an unknown input runs with expected output N/A.
+When a failed submission discloses the answer, it is cached for that exact
+input. If a community oracle was in use, it is rechecked immediately; failure
+discards it for the session and advances to the next candidate.
 
 Both `function` and `class` problems run locally, in Python and C++. Supported
 types are integers, floats, booleans, chars, strings, nested vectors/lists of
@@ -140,9 +154,17 @@ argument and return nothing are handled, as are scalars that identify an
 existing node inside another argument.
 
 Design problems (Min Stack, LRU Cache, Trie, ...) replay their call sequence
-against both your class and the reference class and diff the two lists of
-return values. Encode/decode pairs such as Serialize and Deserialize Binary
-Tree are judged by round-tripping the input through both halves.
+against the selected executable class, or compare it with a known answer list.
+Encode/decode pairs such as Serialize and Deserialize Binary Tree are judged by
+round-tripping the input through both halves, which needs no oracle at all.
+
+Provider solutions are remote code. By default bubblewrap (`bwrap`) compiles
+and runs them without network, home/repository access or the host process table;
+only the per-run scratch directory is writable. Missing bwrap fails closed and
+falls through to answer-only judging. `runner.sandbox = false` explicitly opts
+into running provider code with your full user permissions. Bubblewrap is not a
+VM: the host kernel is shared and memory/process resources are not cgroup-
+limited.
 
 Problems that cannot be reproduced locally — SQL, and anything encoding
 arguments by reference such as clone-graph's adjacency list — say so plainly
@@ -156,7 +178,7 @@ legacy .tests extras. An empty suite runs no cases; delete the .cases file to
 restore the defaults. Changes affect local runs only.
 
 Use <leader>na to add and save the latest failed submission input. Duplicate
-inputs are skipped.
+inputs are skipped; a disclosed expected output is cached automatically.
 
 Legacy extra test cases can be added in a file next to your solution named
 `<solution-file>.tests`, with cases separated by a line containing `---`: >

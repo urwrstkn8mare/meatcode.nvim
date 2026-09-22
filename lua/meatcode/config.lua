@@ -22,6 +22,10 @@ local defaults = {
 	timeout = 30,
 
 	runner = {
+		-- Remote reference/editorial/community code is untrusted. On Linux,
+		-- require bubblewrap and run it without network, home or host filesystem
+		-- access. Set false only to accept native code execution as your user.
+		sandbox = true,
 		python = { cmd = { "python3" } },
 		cpp = {
 			-- {source} and {out} are substituted at build time. Keep debug symbols

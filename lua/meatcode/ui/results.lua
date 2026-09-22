@@ -10,6 +10,7 @@ local STATUS_LABEL = {
   fail = "FAIL",
   error = "ERROR",
   oracle_error = "ORACLE",
+  no_oracle = "RAN",
 }
 
 local STATUS_GROUP = {
@@ -18,6 +19,7 @@ local STATUS_GROUP = {
   fail = "MeatCodeFail",
   error = "MeatCodeFail",
   oracle_error = "MeatCodeWarn",
+  no_oracle = "MeatCodeMuted",
 }
 
 local function push(lines, spans, text, group)
@@ -48,6 +50,13 @@ end
 function M.render_run(buf, result)
   local lines, spans = {}, {}
   push(lines, spans, "")
+  if result.oracle_stage then
+    local source = result.oracle_stage == "expected" and "statement/learned answers"
+      or ((result.oracle_provider and (result.oracle_provider .. " ")) or "")
+        .. result.oracle_stage .. " solution"
+    push(lines, spans, "  Oracle: " .. source, "MeatCodeMuted")
+    push(lines, spans, "")
+  end
 
   if not result.ok then
     if result.unsupported then
@@ -61,10 +70,17 @@ function M.render_run(buf, result)
     end
   else
     local ok = result.passed == result.total
+    local unjudged = result.unjudged or 0
     push(lines, spans,
       string.format("  %s  %d/%d test cases passed",
         ok and "✓" or "✗", result.passed, result.total),
       ok and "MeatCodePass" or "MeatCodeFail")
+    if unjudged > 0 then
+      push(lines, spans,
+        string.format("     %d case(s) ran unjudged — expected output is N/A",
+          unjudged),
+        "MeatCodeMuted")
+    end
     push(lines, spans, "")
 
     for _, c in ipairs(result.cases) do
@@ -76,6 +92,8 @@ function M.render_run(buf, result)
 
       if c.status == "pass_unordered" then
         push(lines, spans, "         (matched, but element order differs)", "MeatCodeWarn")
+      elseif c.status == "no_oracle" then
+        push(lines, spans, "         (expected: N/A — no known answer for this input)", "MeatCodeMuted")
       end
 
       if c.status ~= "pass" then
@@ -143,6 +161,14 @@ function M.render_submit(buf, data)
     if type(data.failed_input) == "string" and vim.trim(data.failed_input) ~= "" then
       push(lines, spans, "  " .. config.options.keys.problem.test_failed
         .. " to add this input to local tests", "MeatCodeMuted")
+    end
+    if data.learned then
+      push(lines, spans,
+        "  Expected output cached for local runs.",
+        "MeatCodeMuted")
+    end
+    if data.oracle_update then
+      push(lines, spans, "  " .. data.oracle_update, "MeatCodeWarn")
     end
   end
 

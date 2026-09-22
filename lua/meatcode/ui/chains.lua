@@ -33,6 +33,7 @@ end
 
 local function render()
   if not is_open() then return end
+  local active = require("meatcode.ui.problem").active()
   local lines, spans, rows = { "", "  provider fallback chains", "" }, {}, {}
   table.insert(spans, { 1, 2, 2 + #"provider fallback chains", "MeatCodeHeader" })
 
@@ -43,9 +44,10 @@ local function render()
     table.insert(spans, { #lines - 1, 2, #lines[#lines], "MeatCodeMuted" })
     for i, name in ipairs(providers.order(slot)) do
       local backend = providers.get(name)
-      local line = string.format("    %d. %s", i, backend.label)
+      local in_use = active and active[slot] == name
+      local line = string.format("  %s %d. %s", in_use and "▸" or " ", i, backend.label)
       table.insert(lines, line)
-      table.insert(spans, { #lines - 1, 7, #line, "MeatCodeKey" })
+      table.insert(spans, { #lines - 1, #line - #backend.label, #line, in_use and "MeatCodePass" or "MeatCodeKey" })
       rows[#lines] = { slot = slot, index = i }
     end
     table.insert(lines, "")
@@ -54,6 +56,10 @@ local function render()
   section("content", "statement, visible tests, starter code")
   section("submit", "cloud judge (WIP solution is never touched)")
 
+  if active then
+    table.insert(lines, string.format("  ▸ in use for %s", active.name))
+    table.insert(spans, { #lines - 1, 2, #lines[#lines], "MeatCodeMuted" })
+  end
   table.insert(lines, "  <C-k>/<C-j> move row · <Tab> jump slots · q closes")
   table.insert(spans, { #lines - 1, 2, #lines[#lines], "MeatCodeMuted" })
 

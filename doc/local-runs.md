@@ -1,15 +1,37 @@
 # Local test runs
 
-`<leader>nr` runs the visible test cases without touching the network.
+`<leader>nr` runs the visible and user-written test cases locally. Opening a
+problem discovers and caches every available oracle, with status messages for
+the statement, each provider and each solution source. Execution itself then
+needs no network.
 
-That is possible because of an asymmetry: expected outputs are kept
-server-side, but NeetCode publishes its own **reference solution** for every
-problem, unauthenticated. So a local run executes your code *and* the reference
-over the same inputs and diffs the two. No rate limit, no round trip, instant
-feedback.
+Oracle selection is **stage-major**, strongest first:
 
-`<leader>ns` is still the real judge — it submits to LeetCode (or NeetCode)
-and runs the hidden suite.
+1. **Reference solution.** NeetCode publishes one for every problem it carries.
+2. **Official editorial.** Free LeetCode editorials embed runnable Python/C++
+   implementations in playgrounds. Premium-gated or prose-only editorials
+   simply fall through.
+3. **Popular community solution.** LeetCode candidates arrive most-voted first;
+   LintCode candidates are sorted by their like count. Arbitrary community code
+   is not trusted on reputation alone: every candidate must pass every visible
+   case with a known answer. A failure, syntax error or incompatible signature
+   advances to the next candidate.
+4. **Known answers.** Answers printed in LeetCode/LintCode statements judge the
+   examples they belong to. Answers disclosed by a failed cloud submission are
+   cached by problem and exact input and join this set.
+
+The configured content-provider fallback chain applies **inside every stage**.
+For example, a NeetCode reference still beats a LeetCode editorial even when
+LeetCode is the preferred statement provider; provider preference only breaks
+ties between candidates in the same stage.
+
+An executable solution oracle can judge any input, including cases you wrote.
+Under the final answer-only stage, an unknown custom case still executes and is
+shown as `RAN` with expected output `N/A`. After the cloud judge reveals an
+answer for that exact input, later local runs grade it normally. The results
+panel names the source ultimately selected.
+
+`<leader>ns` remains the real judge and runs the hidden suite.
 
 ## What runs locally
 
@@ -26,10 +48,13 @@ Handled:
 - in-place problems that mutate their first argument and return nothing
 - 32-bit values passed as zero-padded binary strings (`reverse-bits`)
 - reference solutions whose parameter names differ from the test case keys —
-  arguments are bound positionally
+  arguments are bound positionally, as are LeetCode's and LintCode's unlabelled
+  inputs (one bare value per line) and LintCode's prose labels
+  (`binary tree = {1,2,3}`, whose `{…}`/`#` node encoding is read as LeetCode's
+  `[…]`/`null`)
 - design problems (Min Stack, LRU Cache, Trie, Design Twitter, ...): the call
-  sequence is replayed against both your class and the reference class and the
-  two lists of return values are diffed. Both encodings are decoded —
+  sequence is replayed against your class and the selected executable oracle,
+  or compared with a known answer list. Both input encodings are decoded —
   LeetCode's two-line `names` / `args` pair, and NeetCode's interleaved
   `["MinStack", "push", 1, ...]` form, whose argument boundaries are recovered
   from the arities in the starter code
@@ -50,6 +75,12 @@ you at `<leader>ns`, which always works. C++ additionally cannot take
 Across the NeetCode 150 that is 148/150 runnable locally in Python and 146/150
 in C++.
 
+The layered source chain expands coverage beyond statements, but does not make
+every problem faithfully reproducible. A supported starter with visible inputs
+can always execute; without a surviving source or known answer its output is
+`RAN`/`N/A`. SQL, missing Python/C++ starters, and by-reference structures
+remain non-runnable for the reasons above.
+
 When your output matches the reference only up to ordering, the case is
 reported as passing with a note. The real judge makes the final call.
 
@@ -68,7 +99,12 @@ target=0
 ```
 
 `<leader>na` appends the input from the last failed submission and saves,
-skipping duplicates.
+skipping duplicates. When that verdict includes an expected output, the pair is
+also persisted under `stdpath("cache")/meatcode/known-answers/`; it is matched by
+normalised input content rather than case position. If the last local oracle
+was a community solution, it is immediately checked against the new answer.
+A failure discards it for the session and tries the next popular candidate,
+falling back to known answers when none survive.
 
 The suite lives in `<solution-file>.cases`. Before you first save it, it is the
 visible cases plus any legacy `.tests` extras; once saved, the file *is* the
@@ -86,3 +122,24 @@ one is known — `SIGSEGV` for invalid memory access, `SIGBUS` for invalid or
 misaligned access. If LLDB is installed the harness reruns once, only after a
 crash, and appends a source backtrace. The visible test case that was running
 is named when the harness had got far enough to start one.
+
+## Running provider code safely
+
+Reference, editorial and community implementations are remote code. With the
+default `runner.sandbox = true`, both Python execution and C++ compilation/
+execution require Linux bubblewrap (`bwrap`) and run in fresh user, PID,
+network, IPC and mount namespaces. The sandbox exposes `/usr`, the dynamic
+loader cache and minimal `/dev` read-only/as needed; it exposes no home
+directory or repository, disables networking, clears the environment, and
+makes only that run's scratch directory writable.
+
+This materially limits ordinary malicious code, but is not a VM: it shares the
+host kernel, has no memory/cgroup quota, and compiler/interpreter/kernel
+vulnerabilities remain in scope. The existing wall-clock timeout limits CPU
+loops but not every denial-of-service shape.
+
+If `bwrap` is unavailable, provider-supplied executable candidates fail closed
+and selection continues toward statement/learned answers. Setting
+`runner.sandbox = false` opts out and runs provider code with your full user
+permissions: it could read SSH keys/tokens, modify files, use the network, spawn
+processes or otherwise do anything your account can do.

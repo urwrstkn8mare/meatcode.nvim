@@ -121,18 +121,38 @@ inline JV parseJson(const std::string &s) {
 
 using Args = std::vector<std::pair<std::string, JV> >;
 
-// Split a `name=value` block into ordered (name, value) pairs.
+// Split an input block into ordered (name, value) pairs. NeetCode labels every
+// value (`nums=[1,2]`); LeetCode and LintCode hand out bare values, one per
+// line, in signature order, which bind by position and carry an empty name.
 inline Args parseArgs(const std::string &block) {
   Args out;
   std::istringstream lines(block);
   std::string line;
   while (std::getline(lines, line)) {
     size_t eq = line.find('=');
-    if (eq == std::string::npos) continue;
-    std::string name = line.substr(0, eq);
-    std::string raw = line.substr(eq + 1);
-    while (!name.empty() && isspace((unsigned char)name.front())) name.erase(name.begin());
-    while (!name.empty() && isspace((unsigned char)name.back())) name.pop_back();
+    std::string name, raw;
+    if (eq == std::string::npos) {
+      raw = line;
+    } else {
+      name = line.substr(0, eq);
+      raw = line.substr(eq + 1);
+      while (!name.empty() && isspace((unsigned char)name.front())) name.erase(name.begin());
+      while (!name.empty() && isspace((unsigned char)name.back())) name.pop_back();
+      // Only an identifier is a label; anything else was part of the value.
+      bool ident = !name.empty() && (isalpha((unsigned char)name[0]) || name[0] == '_');
+      for (size_t i = 0; ident && i < name.size(); i++) {
+        if (!isalnum((unsigned char)name[i]) && name[i] != '_') ident = false;
+      }
+      if (!ident) {
+        name.clear();
+        raw = line;
+      }
+    }
+    bool blank = true;
+    for (size_t i = 0; i < raw.size(); i++) {
+      if (!isspace((unsigned char)raw[i])) { blank = false; break; }
+    }
+    if (blank) continue;
     out.push_back(std::make_pair(name, parseJson(raw)));
   }
   return out;
@@ -359,6 +379,26 @@ inline std::string tj(const std::vector<T> &v) {
     out += tj(v[i]);
   }
   return out + "]";
+}
+
+// Re-serialise parsed JSON the way `tj` writes it, so an answer copied out of a
+// problem statement ("[0, 1]") compares equal to a solution's output ("[0,1]").
+inline std::string render(const JV &v) {
+  switch (v.type) {
+    case JV::NUL: return "null";
+    case JV::BOOL: return v.b ? "true" : "false";
+    case JV::NUM: return tj(v.num);
+    case JV::STR: return tj(v.str);
+    case JV::ARR: {
+      std::string out = "[";
+      for (size_t i = 0; i < v.arr.size(); i++) {
+        if (i) out += ",";
+        out += render(v.arr[i]);
+      }
+      return out + "]";
+    }
+  }
+  return "null";
 }
 
 // Order-insensitive form, used only to explain a near miss.

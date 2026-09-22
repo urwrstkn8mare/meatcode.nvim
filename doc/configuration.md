@@ -26,6 +26,10 @@ require("meatcode").setup({
   timeout = 30,
 
   runner = {
+    -- Provider reference/editorial/community code is remote and untrusted.
+    -- true requires bubblewrap and fails closed when it is unavailable.
+    -- false executes that code with your normal user permissions.
+    sandbox = true,
     python = { cmd = { "python3" } },
     cpp = {
       -- {source} and {out} are substituted at build time. Debug symbols and

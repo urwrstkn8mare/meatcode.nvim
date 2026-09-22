@@ -1,8 +1,12 @@
 local auth = require("meatcode.api.leetcode_auth")
 local client = require("meatcode.api.client")
 local config = require("meatcode.config")
+local examples = require("meatcode.api.examples")
+local util = require("meatcode.util")
 
 local M = {}
+
+local SCHEMA = util.META_SCHEMA
 
 local BASE = "https://leetcode.com"
 
@@ -85,6 +89,33 @@ query getStreakCounter {
 }
 ]]
 
+local EDITORIAL_QUERY = [[
+query editorial($titleSlug: String!) {
+  question(titleSlug: $titleSlug) {
+    solution { canSeeDetail paidOnly content }
+  }
+}
+]]
+
+local PLAYGROUND_QUERY = [[
+query playground($uuid: String!) {
+  allPlaygroundCodes(uuid: $uuid) { code langSlug }
+}
+]]
+
+local COMMUNITY_QUERY = [[
+query community($titleSlug: String!) {
+  questionSolutions(filters: {
+    questionSlug: $titleSlug,
+    first: 30,
+    skip: 0,
+    orderBy: most_votes
+  }) {
+    solutions { id title solutionTags { name } post { content } }
+  }
+}
+]]
+
 local LANG_TO_LEETCODE = {
   c = "c",
   cpp = "cpp",
@@ -144,6 +175,74 @@ local function graphql(name, query, variables, cb)
     body = vim.json.encode({ query = query, variables = variables or vim.empty_dict() }),
   }, function(err, decoded)
     cb(err, decoded and decoded.data or nil)
+  end)
+end
+
+--- Official editorial implementations, in the editorial's approach order.
+--- LeetCode stores the actual code in playgrounds embedded as iframes.
+function M.editorial_solutions(slug, lang, cb)
+  graphql("editorial", EDITORIAL_QUERY, { titleSlug = slug }, function(err, data)
+    if err then return cb(err, nil) end
+    local solution = data and data.question and data.question.solution
+    if type(solution) ~= "table" or solution.canSeeDetail ~= true
+      or type(solution.content) ~= "string" then
+      return cb(nil, {})
+    end
+    local uuids, seen = {}, {}
+    for uuid in solution.content:gmatch("/playground/([%w_%-]+)/shared") do
+      if not seen[uuid] then
+        seen[uuid] = true
+        table.insert(uuids, uuid)
+      end
+    end
+    local out, index = {}, 1
+    local function step()
+      local uuid = uuids[index]
+      if not uuid then return cb(nil, out) end
+      index = index + 1
+      graphql("editorial playground", PLAYGROUND_QUERY, { uuid = uuid }, function(_, payload)
+        for _, item in ipairs(type(payload and payload.allPlaygroundCodes) == "table"
+          and payload.allPlaygroundCodes or {}) do
+          if LEETCODE_TO_LANG[item.langSlug] == lang
+            and type(item.code) == "string" and vim.trim(item.code) ~= "" then
+            table.insert(out, item.code)
+          end
+        end
+        step()
+      end)
+    end
+    step()
+  end)
+end
+
+--- Most-voted community implementations, preserving LeetCode's vote ordering.
+function M.community_solutions(slug, lang, cb)
+  graphql("community solutions", COMMUNITY_QUERY, { titleSlug = slug }, function(err, data)
+    if err then return cb(err, nil) end
+    local result = data and data.questionSolutions
+    local out = {}
+    for _, solution in ipairs(type(result and result.solutions) == "table" and result.solutions or {}) do
+      local post = solution.post
+      local tags = {}
+      for _, tag in ipairs(type(solution.solutionTags) == "table" and solution.solutionTags or {}) do
+        tags[(tag.name or ""):lower()] = true
+      end
+      local title = type(solution.title) == "string" and solution.title:lower() or ""
+      local labelled = lang == "python"
+        and (tags.python == true or tags.python3 == true or title:find("python", 1, true))
+        or lang == "cpp"
+        and (tags["c++"] == true or tags.cpp == true
+          or title:find("c++", 1, true) or title:find("cpp", 1, true))
+      for _, code in ipairs(examples.code_blocks(
+        type(post) == "table" and post.content or "", lang, labelled and true or false)) do
+        table.insert(out, {
+          code = code,
+          id = tostring(solution.id or ""),
+          title = solution.title,
+        })
+      end
+    end
+    cb(nil, out)
   end)
 end
 
@@ -222,8 +321,28 @@ function M.problem(slug, cb)
       if type(tag.name) == "string" and tag.name ~= "" then table.insert(topics, tag.name) end
     end
 
+    local cases = type(q.exampleTestcaseList) == "table" and q.exampleTestcaseList or {}
+    local meta_data = type(q.metaData) == "string" and q.metaData or nil
+    local decoded = meta_data and select(2, pcall(vim.json.decode, meta_data)) or nil
+    -- Design problems name their class in `metaData`; encode/decode pairs
+    -- (Codec, ...) do not, and show up as a Python starter implementing
+    -- something other than `Solution`.
+    local classname = type(decoded) == "table" and type(decoded.classname) == "string"
+      and decoded.classname or nil
+    local declared = (starter.python or ""):match("\nclass%s+([%w_]+)")
+      or (starter.python or ""):match("^class%s+([%w_]+)")
+    local class_like = classname ~= nil or (declared ~= nil and declared ~= "Solution")
+
+    -- The statement prints the answer for every example it shows, which is the
+    -- only oracle LeetCode publishes. Keep it only when it lines up exactly with
+    -- the example inputs: a partial parse would judge a case against the wrong
+    -- answer. Premium problems ship an empty statement, so they yield nothing.
+    local outputs = examples.leetcode(q.content)
+    if #outputs ~= #cases then outputs = {} end
+
     cb(nil, {
       provider = "leetcode",
+      schema = SCHEMA,
       question_id = tostring(q.questionId),
       frontend_id = tostring(q.questionFrontendId),
       name = q.title,
@@ -232,10 +351,12 @@ function M.problem(slug, cb)
       description = type(q.content) == "string" and q.content or "",
       starterCode = starter,
       availableLanguages = available,
-      custom_test_cases = type(q.exampleTestcaseList) == "table" and q.exampleTestcaseList or {},
+      custom_test_cases = cases,
+      expected_outputs = outputs,
+      test_case_type = class_like and "class" or "function",
       hints = type(q.hints) == "table" and q.hints or {},
       topics = topics,
-      meta_data = type(q.metaData) == "string" and q.metaData or nil,
+      meta_data = meta_data,
     })
   end)
 end

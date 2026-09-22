@@ -3,15 +3,88 @@ local cpp = require("meatcode.runner.cpp")
 local ops = require("meatcode.runner.ops")
 local util = require("meatcode.util")
 
---- Runs a solution against the visible test cases, locally.
----
---- NeetCode keeps expected outputs server-side, so we obtain them by executing
---- the site's own reference solution over the same inputs and diffing the two.
---- That keeps `run` fully offline and instant; `submit` still goes to the cloud
---- because only the backend has the hidden test suite.
+--- Runs a solution against visible cases. Oracle precedence is stage-major:
+--- reference, official editorial, popular community solution, then published
+--- statement answers. Provider fallback order only breaks ties inside a stage.
+--- Community code is never trusted blindly: candidates are tried in popularity
+--- order and must pass every known example before one may judge user cases.
+--- Cases with no known answer still execute and report RAN under the statement
+--- oracle. A cloud judge's revealed expected output is persisted for later runs.
 local M = {}
 
 M.SUPPORTED = { python = true, cpp = true }
+
+--- Strongest potentially available stage. Final selection happens in `run`
+--- because executable candidates must first survive their sanity run.
+---@return "reference"|"editorial"|"community"|"expected"|nil
+function M.oracle(meta, lang)
+  if type(meta) ~= "table" or not M.SUPPORTED[lang] then return nil end
+  for _, stage in ipairs({ "reference", "editorial", "community" }) do
+    local candidates = type(meta.oracle_candidates) == "table"
+      and meta.oracle_candidates[stage] or nil
+    if type(candidates) == "table" and #candidates > 0 then return stage end
+  end
+  local ref = type(meta.solutions) == "table" and meta.solutions[lang] or nil
+  if type(ref) == "string" and ref ~= "" then return "reference" end
+  local starter = type(meta.starterCode) == "table" and meta.starterCode[lang] or nil
+  return type(starter) == "string" and starter ~= "" and "expected" or nil
+end
+
+local function case_key(block)
+  local parts = {}
+  for _, line in ipairs(vim.split(block, "\n", { plain = true })) do
+    line = vim.trim(line)
+    if line ~= "" then table.insert(parts, line) end
+  end
+  return table.concat(parts, "\n")
+end
+
+local function learned_path(problem_id)
+  return string.format("%s/known-answers/%s.json",
+    config.options.cache_dir, util.slug(tostring(problem_id)))
+end
+
+--- Remember an answer exposed by a failed cloud submission.
+function M.learn(problem_id, input, expected)
+  if type(input) ~= "string" or vim.trim(input) == ""
+    or type(expected) ~= "string" or vim.trim(expected) == "" then
+    return false
+  end
+  local path = learned_path(problem_id)
+  local known = util.read_json(path) or {}
+  known[case_key(input)] = expected
+  util.write_json(path, known)
+  return true
+end
+
+--- Line all published and judge-learned answers up with editable local cases.
+local function expected_values(problem_id, meta, cases)
+  local published = {}
+  for _, answer in ipairs(type(meta.oracle_answers) == "table" and meta.oracle_answers or {}) do
+    if type(answer.input) == "string" and type(answer.output) == "string" then
+      local key = case_key(answer.input)
+      if published[key] == nil then published[key] = answer.output end
+    end
+  end
+  -- Compatibility with provider metadata used directly by scripts.
+  local sources = type(meta.custom_test_cases) == "table" and meta.custom_test_cases or {}
+  for i, output in ipairs(type(meta.expected_outputs) == "table" and meta.expected_outputs or {}) do
+    if sources[i] and type(output) == "string" and output ~= "" then
+      local key = case_key(sources[i])
+      if published[key] == nil then published[key] = output end
+    end
+  end
+  for key, output in pairs(util.read_json(learned_path(problem_id)) or {}) do
+    if type(output) == "string" and output ~= "" then published[key] = output end
+  end
+  local out = {}
+  for i, case in ipairs(cases) do out[i] = published[case_key(case)] or vim.NIL end
+  return out
+end
+
+local function expected_json(problem_id, meta, cases)
+  return ops.encode(expected_values(problem_id, meta, cases))
+end
 
 local function harness_dir()
   local this = debug.getinfo(1, "S").source:sub(2)
@@ -42,14 +115,22 @@ local function summarize(report)
     report.error = (report.error or "unsupported")
       .. " — use " .. config.options.keys.problem.submit .. " to run this one in the cloud"
   end
-  local passed = 0
+  local passed, judged, unjudged = 0, 0, 0
   for _, c in ipairs(report.cases or {}) do
-    if c.status == "pass" or c.status == "pass_unordered" then
-      passed = passed + 1
+    if c.status == "no_oracle" then
+      -- Ran fine, but nothing published an answer for this input, so it is not
+      -- counted for or against the run.
+      unjudged = unjudged + 1
+    else
+      judged = judged + 1
+      if c.status == "pass" or c.status == "pass_unordered" then
+        passed = passed + 1
+      end
     end
   end
   report.passed = passed
-  report.total = #(report.cases or {})
+  report.total = judged
+  report.unjudged = unjudged
   return report
 end
 
@@ -175,11 +256,48 @@ end
 
 
 
+--- Isolate provider-supplied code from the network, home directory, process
+--- table and host filesystem. Only the per-run scratch directory is writable.
+--- The user may opt out explicitly; otherwise missing bubblewrap fails closed.
+local function sandbox_command(cmd, dir, required)
+  if not required or config.options.runner.sandbox == false then return cmd, false end
+  if vim.fn.executable("bwrap") ~= 1 then
+    return nil, "bubblewrap (`bwrap`) is required to run provider-supplied code safely"
+  end
+  local wrapped = {
+    "bwrap", "--unshare-all", "--die-with-parent", "--new-session",
+    "--cap-drop", "ALL", "--clearenv",
+    "--setenv", "PATH", "/usr/bin:/bin",
+    "--setenv", "HOME", "/nonexistent",
+    "--setenv", "LANG", "C.UTF-8",
+    "--setenv", "TMPDIR", "/tmp",
+    "--ro-bind", "/usr", "/usr",
+    "--symlink", "usr/bin", "/bin",
+    "--symlink", "usr/lib", "/lib",
+    "--symlink", "usr/lib", "/lib64",
+    "--dir", "/etc",
+    "--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache",
+    "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+    "--dir", "/nonexistent",
+    "--bind", dir, "/work", "--chdir", "/work", "--",
+  }
+  for _, arg in ipairs(cmd) do
+    if arg == dir then
+      arg = "/work"
+    elseif arg:sub(1, #dir + 1) == dir .. "/" then
+      arg = "/work/" .. arg:sub(#dir + 2)
+    end
+    table.insert(wrapped, arg)
+  end
+  return wrapped, true
+end
+
 --- Run the compiled/interpreted harness and hand back a report.
-local function execute(cmd, dir, cb, debug_crash)
+local function execute(cmd, dir, cb, debug_crash, untrusted)
   local timeout_ms = (config.options.runner.time_limit or 10) * 1000
-  -- Give the whole batch room proportional to the number of cases.
-  vim.system(cmd, { text = true, cwd = dir, timeout = timeout_ms * 6 }, function(res)
+  local isolated, sandboxed_or_err = sandbox_command(cmd, dir, untrusted)
+  if not isolated then return fail(cb, sandboxed_or_err, true) end
+  vim.system(isolated, { text = true, cwd = dir, timeout = timeout_ms * 6 }, function(res)
     vim.schedule(function()
       local report = decode_report(res.stdout or "")
       if report then
@@ -187,35 +305,65 @@ local function execute(cmd, dir, cb, debug_crash)
       end
 
       -- No report: the process died. Attribute it to the last announced case.
-      finish_failure(res, cmd, dir, timeout_ms, debug_crash, cb)
+      finish_failure(res, isolated, dir, timeout_ms,
+        debug_crash and not sandboxed_or_err, cb)
     end)
   end)
 end
 
-local function run_python(problem_id, code, meta, cases, cb)
+--- The source the harness reads the signature from: the reference solution when
+--- there is one, otherwise the starter code, which declares the same method.
+local function signature_source(meta, lang, oracle)
+  if oracle == "reference" then
+    return meta._oracle_code or (meta.solutions and meta.solutions[lang])
+  end
+  return meta.starterCode and meta.starterCode[lang] or nil
+end
+
+--- Parameter types LeetCode declares in `metaData`, as a JSON array.
+---
+--- Starter code usually annotates its own parameters, but the encode/decode
+--- starters do not, and an unannotated `root` would reach the solution as a
+--- plain list instead of a tree. `metaData` names the type in that case.
+local function declared_types(meta)
+  local decoded = type(meta.meta_data) == "string"
+    and select(2, pcall(vim.json.decode, meta.meta_data)) or nil
+  local types = {}
+  for _, param in ipairs(type(decoded) == "table" and decoded.params or {}) do
+    table.insert(types, type(param.type) == "string" and param.type or vim.NIL)
+  end
+  return ops.encode(types)
+end
+
+local function run_python(problem_id, code, meta, cases, cb, oracle)
   local dir = workdir(problem_id, "python")
-  local ref = meta.solutions and meta.solutions.python
+  local ref = signature_source(meta, "python", oracle)
   if not ref or ref == "" then
-    return fail(cb, "NeetCode publishes no Python reference solution for this problem", true)
+    return fail(cb, "no Python starter code to derive the signature from", true)
   end
 
   util.write_file(dir .. "/user.py", code)
   util.write_file(dir .. "/ref.py", ref)
+  util.write_file(dir .. "/harness.py", util.read_file(harness_dir() .. "/python.py"))
   util.write_json(dir .. "/cases.json", cases)
+  util.write_file(dir .. "/types.json", declared_types(meta))
+  util.write_file(dir .. "/expected.json", expected_json(problem_id, meta, cases))
 
   local py = vim.deepcopy(config.options.runner.python.cmd)
-  table.insert(py, harness_dir() .. "/python.py")
+  table.insert(py, dir .. "/harness.py")
   table.insert(py, dir)
-  execute(py, dir, cb)
+  table.insert(py, "function")
+  table.insert(py, oracle)
+  execute(py, dir, cb, false, meta._untrusted_user or oracle == "reference")
 end
 
 --- Design problems: normalise the call sequence, then replay it in the harness.
 --- `mode` is "class" for an operation sequence, "roundtrip" for encode/decode.
-local function run_python_class(problem_id, code, meta, cases, cb, mode)
+local function run_python_class(problem_id, code, meta, cases, cb, mode, oracle)
   local dir = workdir(problem_id, "python")
-  local ref = meta.solutions and meta.solutions.python
+  local ref = signature_source(meta, "python", oracle)
   if not ref or ref == "" then
-    return fail(cb, "NeetCode publishes no Python reference solution for this problem", true)
+    return fail(cb, "no Python starter code to derive the signature from", true)
   end
 
   if mode == "class" then
@@ -232,29 +380,31 @@ local function run_python_class(problem_id, code, meta, cases, cb, mode)
 
   util.write_file(dir .. "/user.py", code)
   util.write_file(dir .. "/ref.py", ref)
+  util.write_file(dir .. "/harness.py", util.read_file(harness_dir() .. "/python.py"))
   util.write_json(dir .. "/cases.json", cases)
+  util.write_file(dir .. "/types.json", declared_types(meta))
+  util.write_file(dir .. "/expected.json", expected_json(problem_id, meta, cases))
 
   local py = vim.deepcopy(config.options.runner.python.cmd)
-  table.insert(py, harness_dir() .. "/python.py")
+  table.insert(py, dir .. "/harness.py")
   table.insert(py, dir)
   table.insert(py, mode)
-  execute(py, dir, cb)
+  table.insert(py, oracle)
+  execute(py, dir, cb, false, meta._untrusted_user or oracle == "reference")
 end
 
-local function run_cpp(problem_id, code, meta, cases, cb, mode)
+local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle)
   local dir = workdir(problem_id, "cpp")
-  local ref = meta.solutions and meta.solutions.cpp
-  if not ref or ref == "" then
-    return fail(cb, "NeetCode publishes no C++ reference solution for this problem", true)
-  end
   local starter = meta.starterCode and meta.starterCode.cpp
   if not starter or starter == "" then
     return fail(cb, "no C++ starter code to derive the signature from", true)
   end
+  local ref = oracle == "reference"
+    and (meta._oracle_code or (meta.solutions and meta.solutions.cpp)) or nil
 
   local main_src, gen_err
   if mode == "roundtrip" then
-    main_src, gen_err = cpp.generate_roundtrip(starter)
+    main_src, gen_err = cpp.generate_roundtrip(starter, oracle)
   elseif mode == "class" then
     local cls, cls_err = cpp.parse_class(starter)
     if not cls then
@@ -265,18 +415,19 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode)
       return fail(cb, enc_err, true)
     end
     util.write_file(dir .. "/ops.json", encoded)
-    main_src, gen_err = cpp.generate_class(starter)
+    main_src, gen_err = cpp.generate_class(starter, oracle)
   else
-    main_src, gen_err = cpp.generate(starter)
+    main_src, gen_err = cpp.generate(starter, oracle)
   end
   if not main_src then
     return fail(cb, gen_err, true)
   end
 
   util.write_file(dir .. "/user.cpp", strip_includes(code))
-  util.write_file(dir .. "/ref.cpp", strip_includes(ref))
+  util.write_file(dir .. "/ref.cpp", ref and strip_includes(ref) or "")
   util.write_file(dir .. "/main.cpp", main_src)
   util.write_json(dir .. "/cases.json", cases)
+  util.write_file(dir .. "/expected.json", expected_json(problem_id, meta, cases))
 
   local runtime = util.read_file(harness_dir() .. "/cpp_runtime.h")
   util.write_file(dir .. "/cpp_runtime.h", runtime)
@@ -290,7 +441,10 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode)
     table.insert(compile, arg)
   end
 
-  vim.system(compile, { text = true, cwd = dir, timeout = 120000 }, function(res)
+  local untrusted = meta._untrusted_user or oracle == "reference"
+  local compile_cmd, sandbox_err = sandbox_command(compile, dir, untrusted)
+  if not compile_cmd then return fail(cb, sandbox_err, true) end
+  vim.system(compile_cmd, { text = true, cwd = dir, timeout = 120000 }, function(res)
     vim.schedule(function()
       if res.code ~= 0 then
         local msg = vim.trim(res.stderr or "")
@@ -309,42 +463,142 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode)
         end
         return fail(cb, msg)
       end
-      execute({ bin, dir }, dir, cb, true)
+      execute({ bin, dir }, dir, cb, true, untrusted)
     end)
   end)
 end
 
+local function run_selected(problem_id, code, lang, meta, cases, cb, oracle)
+  local kind = meta.test_case_type or "function"
+  if kind ~= "function" and kind ~= "class" then
+    return fail(cb, string.format("`%s` problems can only run in the cloud", kind), true)
+  end
+  if kind == "class" and not cases[1]:match('^%s*%[%s*"') then kind = "roundtrip" end
+  if lang == "python" then
+    if kind ~= "function" then
+      return run_python_class(problem_id, code, meta, cases, cb, kind, oracle)
+    end
+    return run_python(problem_id, code, meta, cases, cb, oracle)
+  end
+  return run_cpp(problem_id, code, meta, cases, cb, kind, oracle)
+end
+
+local function source_candidates(meta, lang)
+  local out = {}
+  for _, stage in ipairs({ "reference", "editorial", "community" }) do
+    for _, candidate in ipairs(type(meta.oracle_candidates) == "table"
+      and type(meta.oracle_candidates[stage]) == "table"
+      and meta.oracle_candidates[stage] or {}) do
+      if type(candidate.code) == "string" and candidate.code ~= "" then
+        table.insert(out,
+          vim.tbl_extend("force", vim.deepcopy(candidate), { stage = stage }))
+      end
+    end
+  end
+  if #out == 0 then
+    local code = type(meta.solutions) == "table" and meta.solutions[lang] or nil
+    if type(code) == "string" and code ~= "" then
+      table.insert(out, { stage = "reference", provider = "neetcode", code = code })
+    end
+  end
+  return out
+end
+
+--- Pick the first executable source under stage-major/provider-minor order.
+--- Community candidates require known answers; a popularity ranking alone is
+--- never enough to make arbitrary user code an oracle.
+local function resolve_source(problem_id, lang, meta, cases, cb, status)
+  local candidates = source_candidates(meta, lang)
+  local values = expected_values(problem_id, meta, cases)
+  local known = {}
+  for i, value in ipairs(values) do
+    if value ~= vim.NIL then table.insert(known, cases[i]) end
+  end
+  local index, rejected = 1, {}
+  local function step()
+    local candidate = candidates[index]
+    index = index + 1
+    if not candidate then return cb(nil, rejected) end
+    if candidate.stage == "community" and #known == 0 then return step() end
+    if status then
+      status(string.format("Validating %s %s candidate %d/%d against known cases",
+        candidate.provider or "local", candidate.stage, index - 1, #candidates))
+    end
+
+    local trial_meta = vim.deepcopy(meta)
+    trial_meta._oracle_code = candidate.code
+    trial_meta._untrusted_user = true
+    local trial_cases = #known > 0 and known or cases
+    local trial_oracle = #known > 0 and "expected" or "reference"
+    run_selected(problem_id, candidate.code, lang,
+      trial_meta, trial_cases, function(report)
+        if report.ok and report.total > 0 and report.passed == report.total then
+          return cb(candidate, rejected)
+        end
+        if status then
+          local reason = (report.error or "Candidate failed known cases"):match("^[^\n]+")
+          status(reason .. " — trying next source")
+        end
+        table.insert(rejected, candidate)
+        step()
+      end, trial_oracle)
+  end
+  step()
+end
+
 --- Run `code` against `cases` locally.
----@param problem_id string
----@param code string
----@param lang string
----@param meta table problem metadata (needs solutions + starterCode)
----@param cases string[] "name=value" input blocks
----@param cb fun(result: meatcode.RunResult)
-function M.run(problem_id, code, lang, meta, cases, cb)
+function M.run(problem_id, code, lang, meta, cases, cb, status)
   if not M.SUPPORTED[lang] then
     return fail(cb, string.format("local runs are not supported for %s yet", lang), true)
   end
   if #cases == 0 then
     return fail(cb, "no visible test cases available for this problem", true)
   end
-  local kind = meta.test_case_type or "function"
-  if kind ~= "function" and kind ~= "class" then
-    return fail(cb, string.format("`%s` problems can only run in the cloud", kind), true)
-  end
-  -- A few problems are tagged "class" but hand out plain `name=value` inputs:
-  -- those are encode/decode pairs judged by round-tripping the input.
-  if kind == "class" and not cases[1]:match("^%s*%[") then
-    kind = "roundtrip"
+  if not M.oracle(meta, lang) then
+    return fail(cb, "no starter code is available for a local run", true)
   end
 
-  if lang == "python" then
-    if kind ~= "function" then
-      return run_python_class(problem_id, code, meta, cases, cb, kind)
+  resolve_source(problem_id, lang, meta, cases, function(candidate)
+    local selected = vim.deepcopy(meta)
+    selected._oracle_code = candidate and candidate.code or nil
+    local harness_oracle = candidate and "reference" or "expected"
+    if status then
+      status(candidate
+        and string.format("Running with %s %s oracle", candidate.provider, candidate.stage)
+        or "Running with statement and learned answers (unknown outputs are N/A)")
     end
-    return run_python(problem_id, code, meta, cases, cb)
-  end
-  return run_cpp(problem_id, code, meta, cases, cb, kind)
+    run_selected(problem_id, code, lang, selected, cases, function(report)
+      report.oracle_stage = candidate and candidate.stage or "expected"
+      report.oracle_provider = candidate and candidate.provider or nil
+      report.oracle_id = candidate and candidate.id or nil
+      cb(report)
+    end, harness_oracle)
+  end, status)
+end
+
+--- Re-run oracle selection after the cloud judge teaches us a new answer.
+--- Rejected community candidates are removed from this session so subsequent
+--- runs start at the newly selected candidate rather than retrying known-bad
+--- code.
+function M.revalidate(problem_id, lang, meta, cases, cb, status)
+  resolve_source(problem_id, lang, meta, cases, function(candidate, rejected)
+    local bad = {}
+    for _, item in ipairs(rejected or {}) do
+      if item.stage == "community" then bad[item.code] = true end
+    end
+    if type(meta.oracle_candidates) == "table"
+      and type(meta.oracle_candidates.community) == "table" then
+      meta.oracle_candidates.community = vim.tbl_filter(function(item)
+        return not bad[item.code]
+      end, meta.oracle_candidates.community)
+    end
+    cb({
+      stage = candidate and candidate.stage or "expected",
+      provider = candidate and candidate.provider or nil,
+      id = candidate and candidate.id or nil,
+      rejected = #vim.tbl_keys(bad),
+    })
+  end, status)
 end
 
 return M

@@ -176,6 +176,7 @@ static std::string readFile(const std::string &path) {
 int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : ".";
   ncrt::JV cases = ncrt::parseJson(readFile(dir + "/cases.json"));
+  ncrt::JV published = ncrt::parseJson(readFile(dir + "/expected.json"));
 
   std::string out = "{\"ok\":true,\"method\":\"%s\",\"cases\":[";
 
@@ -189,7 +190,7 @@ int main(int argc, char **argv) {
 
     std::string expected, actual, status, logs, errmsg;
     double elapsed = 0.0;
-    bool oracleOk = true, userErr = false;
+    bool oracleOk = true, userErr = false, judged = true;
 
     try {
 %s
@@ -222,6 +223,7 @@ int main(int argc, char **argv) {
       logs = cap.str();
 
       if (userErr) status = "error";
+      else if (!judged) status = "no_oracle";
       else if (actual == expected) status = "pass";
       else if (ncrt::canonical(actual) == ncrt::canonical(expected)) status = "pass_unordered";
       else status = "fail";
@@ -231,7 +233,7 @@ int main(int argc, char **argv) {
     out += "{\"index\":" + std::to_string(ci);
     out += ",\"input\":" + ncrt::tj(block);
     out += ",\"status\":" + ncrt::tj(status);
-    out += ",\"expected\":" + ncrt::tj(expected);
+    if (judged) out += ",\"expected\":" + ncrt::tj(expected);
     out += ",\"actual\":" + ncrt::tj(actual);
     out += ",\"elapsed_ms\":" + ncrt::tj(elapsed);
     if (!logs.empty()) out += ",\"stdout\":" + ncrt::tj(logs);
@@ -245,24 +247,42 @@ int main(int argc, char **argv) {
 }
 ]]
 
---- Build main.cpp. `user.cpp` and `ref.cpp` are included from the same dir.
+--- Take the expected output of case `ci` from the answers the statement
+--- published, marking the case unjudged when it published none.
+local PUBLISHED_EXPECTED = [[
+        const ncrt::JV &pub = ncrt::argAt(published, ci);
+        if (pub.type != ncrt::JV::STR || pub.str.empty()) judged = false;
+        else expected = ncrt::render(ncrt::parseJson(pub.str));
+]]
+
+--- `user.cpp` is always included; `ref.cpp` only when it is the oracle, since
+--- under the published-answer oracle there is no reference solution to compile.
+local function translation_unit(driver, oracle)
+  local parts = { PRELUDE, '\nnamespace usersol {\n#include "user.cpp"\n}\n' }
+  if oracle ~= "expected" then
+    table.insert(parts, '\nnamespace refsol {\n#include "ref.cpp"\n}\n')
+  end
+  table.insert(parts, driver)
+  return table.concat(parts)
+end
+
+--- Build main.cpp. `user.cpp` (and, for the reference oracle, `ref.cpp`) are
+--- included from the same dir.
+---@param starter string
+---@param oracle string|nil "reference" (default) or "expected"
 ---@return string|nil source, string|nil err
-function M.generate(starter)
+function M.generate(starter, oracle)
   local sig, err = M.parse_signature(starter)
   if not sig then
     return nil, err
   end
 
+  local expected_block = oracle == "expected" and PUBLISHED_EXPECTED
+    or emit_call(sig, "refsol", "expected")
   local driver = string.format(FUNCTION_DRIVER, "", sig.name,
-    emit_call(sig, "refsol", "expected"), emit_call(sig, "usersol", "actual"))
+    expected_block, emit_call(sig, "usersol", "actual"))
 
-
-  return table.concat({
-    PRELUDE,
-    '\nnamespace usersol {\n#include "user.cpp"\n}\n',
-    '\nnamespace refsol {\n#include "ref.cpp"\n}\n',
-    driver,
-  }), nil
+  return translation_unit(driver, oracle), nil
 end
 
 -- ------------------------------------------------------------ class problems
@@ -404,8 +424,10 @@ static std::string replay(const ncrt::JV &ops) {
 end
 
 --- Build main.cpp for a design problem.
+---@param starter string
+---@param oracle string|nil "reference" (default) or "expected"
 ---@return string|nil source, string|nil err
-function M.generate_class(starter)
+function M.generate_class(starter, oracle)
   local cls, err = M.parse_class(starter)
   if not cls then
     return nil, err
@@ -425,6 +447,7 @@ int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : ".";
   ncrt::JV cases = ncrt::parseJson(readFile(dir + "/ops.json"));
   ncrt::JV raw = ncrt::parseJson(readFile(dir + "/cases.json"));
+  ncrt::JV published = ncrt::parseJson(readFile(dir + "/expected.json"));
 
   std::string out = "{\"ok\":true,\"method\":\"%s\",\"cases\":[";
 
@@ -435,10 +458,10 @@ int main(int argc, char **argv) {
     const ncrt::JV &ops = cases.arr[ci];
     std::string expected, actual, status, logs, errmsg;
     double elapsed = 0.0;
-    bool oracleOk = true, userErr = false;
+    bool oracleOk = true, userErr = false, judged = true;
 
     try {
-      expected = replay<refsol::%s>(ops);
+%s
     } catch (const std::exception &e) {
       oracleOk = false;
       errmsg = e.what();
@@ -468,7 +491,9 @@ int main(int argc, char **argv) {
       logs = cap.str();
 
       if (userErr) status = "error";
+      else if (!judged) status = "no_oracle";
       else if (actual == expected) status = "pass";
+      else if (ncrt::canonical(actual) == ncrt::canonical(expected)) status = "pass_unordered";
       else status = "fail";
     }
 
@@ -476,7 +501,7 @@ int main(int argc, char **argv) {
     out += "{\"index\":" + std::to_string(ci);
     out += ",\"input\":" + ncrt::tj(ncrt::argAt(raw, ci).str);
     out += ",\"status\":" + ncrt::tj(status);
-    out += ",\"expected\":" + ncrt::tj(expected);
+    if (judged) out += ",\"expected\":" + ncrt::tj(expected);
     out += ",\"actual\":" + ncrt::tj(actual);
     out += ",\"elapsed_ms\":" + ncrt::tj(elapsed);
     if (!logs.empty()) out += ",\"stdout\":" + ncrt::tj(logs);
@@ -488,21 +513,21 @@ int main(int argc, char **argv) {
   std::cout << out << std::endl;
   return 0;
 }
-]], emit_replay(cls), cls.name, cls.name, cls.name)
+]], emit_replay(cls), cls.name,
+    oracle == "expected" and PUBLISHED_EXPECTED
+      or string.format("      expected = replay<refsol::%s>(ops);", cls.name),
+    cls.name)
 
-  return table.concat({
-    PRELUDE,
-    '\nnamespace usersol {\n#include "user.cpp"\n}\n',
-    '\nnamespace refsol {\n#include "ref.cpp"\n}\n',
-    driver,
-  }), nil
+  return translation_unit(driver, oracle), nil
 end
 
 --- Some "class" problems are really round trips: an encode method and a decode
 --- method that must invert each other. Their test cases are plain inputs, so we
 --- feed the input through both and compare what comes back out.
+---@param starter string
+---@param oracle string|nil "reference" (default) or "expected"
 ---@return string|nil source, string|nil err
-function M.generate_roundtrip(starter)
+function M.generate_roundtrip(starter, oracle)
   local cls, err = M.parse_class(starter)
   if not cls then
     return nil, err
@@ -531,17 +556,17 @@ static std::string roundtrip(const ncrt::Args &A) {
 }
 ]], p.type, p.name, p.name, p.name, enc.name, p.name, dec.name)
 
+  -- The pair has to invert itself, so with no reference solution the input is
+  -- its own expected output.
+  local expected_block = oracle == "expected"
+      and string.format('        expected = ncrt::render(ncrt::pick(A, 0, "%s"));', p.name)
+    or string.format("        expected = roundtrip<refsol::%s>(A);", cls.name)
   local driver = string.format(FUNCTION_DRIVER, preamble,
     enc.name .. " -> " .. dec.name,
-    string.format("        expected = roundtrip<refsol::%s>(A);", cls.name),
+    expected_block,
     string.format("        actual = roundtrip<usersol::%s>(A);", cls.name))
 
-  return table.concat({
-    PRELUDE,
-    '\nnamespace usersol {\n#include "user.cpp"\n}\n',
-    '\nnamespace refsol {\n#include "ref.cpp"\n}\n',
-    driver,
-  }), nil
+  return translation_unit(driver, oracle), nil
 end
 
 --- Helper type definitions NeetCode leaves in the starter's comment block.

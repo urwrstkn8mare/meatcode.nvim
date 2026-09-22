@@ -1,12 +1,22 @@
 """Local test harness for meatcode.nvim (Python).
 
-NeetCode keeps expected outputs server-side, so we recover them by running the
-site's own reference solution against the same inputs and diffing. Both the user
-solution and the reference run in isolated namespaces seeded with the type names
-their annotations expect (List, Optional, ListNode, TreeNode, ...).
+Two oracles produce the expected output a case is judged against:
 
-Usage: python3 python.py <workdir>
-Reads user.py, ref.py and cases.json from <workdir>; writes a JSON report to stdout.
+- "reference": NeetCode publishes its own solution, so it is run over the same
+  input and the two results are diffed. Judges any input, including cases you
+  wrote yourself.
+- "expected": LeetCode and LintCode publish no solution, but they print the
+  answer for every example they show. Those answers arrive in expected.json,
+  aligned with cases.json, and judge exactly the cases they belong to. A case
+  with no published answer still runs, and reports its output unjudged.
+
+Both the user solution and the signature source run in isolated namespaces
+seeded with the type names their annotations expect (List, Optional, ListNode,
+TreeNode, ...).
+
+Usage: python3 python.py <workdir> [mode] [oracle]
+Reads user.py, ref.py, cases.json and (for the expected oracle) expected.json
+from <workdir>; writes a JSON report to stdout.
 """
 import ast
 import copy
@@ -190,7 +200,7 @@ def base_namespace():
 
 def load_solution(path, label, prelude=None, want="Solution"):
     with open(path, "r") as fh:
-        src = fh.read()
+        src = repair(fh.read())
     ns = base_namespace()
     # Real print; sys.stdout is redirected during invoke() to capture user logs.
     ns["print"] = print
@@ -245,15 +255,125 @@ def parse_scalar(raw):
 
 
 def parse_input(block):
-    """Parse a `name=value` block into an ordered list of (name, value)."""
+    """Parse an input block into an ordered list of (name, value).
+
+    NeetCode labels every value (`nums=[1,2]`). LeetCode and LintCode hand out
+    bare values, one per line, in signature order; those bind positionally, so
+    they are returned with an empty name.
+    """
     args = []
     for line in block.split("\n"):
         line = line.strip()
-        if not line or "=" not in line:
+        if not line:
             continue
-        name, _, raw = line.partition("=")
-        args.append((name.strip(), parse_scalar(raw.strip())))
+        name, sep, raw = line.partition("=")
+        if sep and re.fullmatch(r"[A-Za-z_]\w*", name.strip()):
+            args.append((name.strip(), parse_scalar(raw.strip())))
+        else:
+            args.append(("", parse_scalar(line)))
     return args
+
+
+def repair(src):
+    """Make starter code importable.
+
+    LeetCode and LintCode ship starters whose method body is a comment or
+    nothing at all, which does not parse. The starter is never executed under
+    the expected-output oracle — it is only there to carry the signature — so an
+    empty body is filled in with `pass`.
+    """
+    try:
+        ast.parse(src)
+        return src
+    except SyntaxError:
+        pass
+    lines = src.split("\n")
+    out = []
+    for i, line in enumerate(lines):
+        out.append(line)
+        stripped = line.strip()
+        if not stripped.endswith(":") or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        body = None
+        for nxt in lines[i + 1:]:
+            if nxt.strip() and not nxt.strip().startswith("#"):
+                body = nxt
+                break
+        if body is None or (len(body) - len(body.lstrip())) <= indent:
+            out.append(" " * (indent + 4) + "pass")
+    repaired = "\n".join(out)
+    ast.parse(repaired)
+    return repaired
+
+
+def load_types(workdir):
+    """Parameter types the provider declares, positionally.
+
+    Starter code normally annotates itself, but the encode/decode starters do
+    not — an unannotated `root` would reach the solution as a plain list rather
+    than a tree. These names fill that gap; `annotation_names` reads them the
+    same way it reads a forward reference.
+    """
+    path = os.path.join(workdir, "types.json")
+    if not os.path.exists(path):
+        return []
+    with open(path) as fh:
+        raw = json.load(fh)
+    return [t if isinstance(t, str) else None for t in raw]
+
+
+def annotation_at(params, declared, i):
+    """The annotation for argument `i`, falling back to the declared type."""
+    ann = params[i].annotation if i < len(params) else inspect.Parameter.empty
+    if ann is inspect.Parameter.empty and i < len(declared) and declared[i]:
+        return declared[i]
+    return ann
+
+
+def load_expected(workdir, count):
+    """Published answers per case, as (judged, value) pairs.
+
+    `judged` is false when the statement published no usable answer for that
+    input — a case the user added, or one whose answer is written as prose.
+    """
+    path = os.path.join(workdir, "expected.json")
+    if not os.path.exists(path):
+        return [(False, None)] * count
+    with open(path) as fh:
+        raw = json.load(fh)
+    out = []
+    for i in range(count):
+        value = raw[i] if i < len(raw) else None
+        if not isinstance(value, str) or not value.strip():
+            out.append((False, None))
+            continue
+        try:
+            out.append((True, normalize(json.loads(value))))
+        except Exception:
+            try:
+                out.append((True, normalize(ast.literal_eval(value))))
+            except Exception:
+                # Statements sometimes annotate the answer in prose
+                # ("5, nums = [0,1,_,_]"); that cannot be judged against.
+                out.append((False, None))
+    return out
+
+
+def judge(entry, actual, expected, judged=True):
+    """Grade one case. `judged` is false when no answer was published for it."""
+    if not judged:
+        entry["status"] = "no_oracle"
+        return
+    entry["expected"] = fmt(expected)
+    if actual == expected:
+        entry["status"] = "pass"
+    elif canonical(actual) == canonical(expected):
+        # Many problems accept any ordering; the real judge decides, so we
+        # surface this as a pass but say the ordering differed.
+        entry["status"] = "pass_unordered"
+    else:
+        entry["status"] = "fail"
 
 
 def annotation_names(ann):
@@ -365,7 +485,7 @@ def fmt(value):
     return json.dumps(value, separators=(",", ":"), sort_keys=False)
 
 
-def invoke(cls, method, args, params, ret_ann=None, ns=None):
+def invoke(cls, method, args, params, ret_ann=None, ns=None, declared=()):
     """Call the solution, returning (output, captured_stdout)."""
     # Bind positionally rather than by name: NeetCode's reference solutions
     # sometimes name a parameter differently from the test-case input (e.g.
@@ -376,7 +496,7 @@ def invoke(cls, method, args, params, ret_ann=None, ns=None):
         if i >= len(ordered):
             break
         call_args.append(
-            coerce(copy.deepcopy(value), ordered[i].annotation, ns, call_args))
+            coerce(copy.deepcopy(value), annotation_at(ordered, declared, i), ns, call_args))
 
     buf = io.StringIO()
     real_stdout = sys.stdout
@@ -461,8 +581,13 @@ def replay(cls, ops, anns):
     return out
 
 
-def run_class_cases(workdir, report):
-    """Design problems: replay the same calls against both implementations."""
+def run_class_cases(workdir, report, oracle):
+    """Design problems: replay the recorded call sequence and grade the returns.
+
+    Under the reference oracle the same sequence runs against NeetCode's class
+    too; otherwise the published answer list is the expected value. `ref.py` is
+    the signature source either way, so annotations resolve the same.
+    """
     with open(os.path.join(workdir, "ops.json")) as fh:
         cases = json.load(fh)
     with open(os.path.join(workdir, "cases.json")) as fh:
@@ -477,18 +602,22 @@ def run_class_cases(workdir, report):
         os.path.join(workdir, "ref.py"), "<reference>", prelude, name)
     report["method"] = name
     anns = annotations_for(RefClass)
+    published = load_expected(workdir, len(cases)) if oracle == "expected" else None
 
     for i, ops in enumerate(cases):
         entry = {"index": i, "input": raw_cases[i] if i < len(raw_cases) else ""}
 
-        try:
-            expected = replay(RefClass, ops, anns)
-            entry["expected"] = fmt(expected)
-        except Exception:
-            entry["status"] = "oracle_error"
-            entry["error"] = traceback.format_exc(limit=3)
-            report["cases"].append(entry)
-            continue
+        judged = True
+        if published is not None:
+            judged, expected = published[i]
+        else:
+            try:
+                expected = replay(RefClass, ops, anns)
+            except Exception:
+                entry["status"] = "oracle_error"
+                entry["error"] = traceback.format_exc(limit=3)
+                report["cases"].append(entry)
+                continue
 
         buf = io.StringIO()
         real_stdout = sys.stdout
@@ -496,6 +625,8 @@ def run_class_cases(workdir, report):
         started = time.perf_counter()
         try:
             actual = replay(UserClass, ops, anns)
+        except Unsupported:
+            raise
         except Exception:
             sys.stdout = real_stdout
             entry["status"] = "error"
@@ -510,7 +641,7 @@ def run_class_cases(workdir, report):
         entry["actual"] = fmt(actual)
         if buf.getvalue():
             entry["stdout"] = buf.getvalue()
-        entry["status"] = "pass" if actual == expected else "fail"
+        judge(entry, actual, expected, judged)
         report["cases"].append(entry)
 
 
@@ -519,8 +650,12 @@ def public_methods(cls):
     return [n for n, v in vars(cls).items() if callable(v) and not n.startswith("_")]
 
 
-def run_roundtrip_cases(workdir, report):
-    """Encode/decode pairs: push the input through both halves and compare."""
+def run_roundtrip_cases(workdir, report, oracle):
+    """Encode/decode pairs: push the input through both halves and compare.
+
+    The pair has to invert itself, so with no reference solution the input is
+    its own expected output — no published answer is needed.
+    """
     with open(os.path.join(workdir, "cases.json")) as fh:
         cases = json.load(fh)
     with open(os.path.join(workdir, "ref.py")) as fh:
@@ -548,28 +683,34 @@ def run_roundtrip_cases(workdir, report):
         if n != "self"
     ]
 
+    declared = load_types(workdir)
+
     def roundtrip(cls, ns, args):
         obj = cls()
         call = []
         for i, (_, value) in enumerate(args):
-            ann = params[i].annotation if i < len(params) else None
-            call.append(coerce(copy.deepcopy(value), ann, ns, call))
+            call.append(coerce(copy.deepcopy(value), annotation_at(params, declared, i), ns, call))
         return normalize(getattr(obj, decode)(getattr(obj, encode)(*call)))
 
     for i, block in enumerate(cases):
         args = parse_input(block)
         entry = {"index": i, "input": block}
 
-        try:
-            expected = roundtrip(RefClass, ref_ns, args)
-            entry["expected"] = fmt(expected)
-        except Unsupported:
-            raise
-        except Exception:
-            entry["status"] = "oracle_error"
-            entry["error"] = traceback.format_exc(limit=3)
-            report["cases"].append(entry)
-            continue
+        judged = True
+        if oracle == "expected":
+            expected = normalize(coerce(copy.deepcopy(args[0][1]),
+                                        annotation_at(params, declared, 0),
+                                        user_ns, [])) if args else None
+        else:
+            try:
+                expected = roundtrip(RefClass, ref_ns, args)
+            except Unsupported:
+                raise
+            except Exception:
+                entry["status"] = "oracle_error"
+                entry["error"] = traceback.format_exc(limit=3)
+                report["cases"].append(entry)
+                continue
 
         buf = io.StringIO()
         real_stdout = sys.stdout
@@ -577,6 +718,8 @@ def run_roundtrip_cases(workdir, report):
         started = time.perf_counter()
         try:
             actual = roundtrip(UserClass, user_ns, args)
+        except Unsupported:
+            raise
         except Exception:
             sys.stdout = real_stdout
             entry["status"] = "error"
@@ -591,19 +734,20 @@ def run_roundtrip_cases(workdir, report):
         entry["actual"] = fmt(actual)
         if buf.getvalue():
             entry["stdout"] = buf.getvalue()
-        entry["status"] = "pass" if actual == expected else "fail"
+        judge(entry, actual, expected, judged)
         report["cases"].append(entry)
 
 
 def main():
     workdir = sys.argv[1]
     mode = sys.argv[2] if len(sys.argv) > 2 else "function"
+    oracle = sys.argv[3] if len(sys.argv) > 3 else "reference"
     report = {"ok": True, "cases": []}
 
     if mode in ("class", "roundtrip"):
         runner = run_class_cases if mode == "class" else run_roundtrip_cases
         try:
-            runner(workdir, report)
+            runner(workdir, report, oracle)
         except Unsupported as exc:
             report.update(ok=False, unsupported=True, error=str(exc))
         except Exception:
@@ -641,29 +785,40 @@ def main():
         return
 
     report["method"] = method
+    declared = load_types(workdir)
+    published = load_expected(workdir, len(cases)) if oracle == "expected" else None
 
     for i, block in enumerate(cases):
         args = parse_input(block)
         entry = {"index": i, "input": block}
 
+        judged = True
+        if published is not None:
+            judged, expected = published[i]
+        else:
+            try:
+                expected, _ = invoke(RefSolution, method, args, params, ret_ann, ref_ns, declared)
+            except Unsupported as exc:
+                report["ok"] = False
+                report["unsupported"] = True
+                report["error"] = str(exc)
+                print(json.dumps(report))
+                return
+            except Exception:
+                entry["status"] = "oracle_error"
+                entry["error"] = traceback.format_exc(limit=3)
+                report["cases"].append(entry)
+                continue
+
+        started = time.perf_counter()
         try:
-            expected, _ = invoke(RefSolution, method, args, params, ret_ann, ref_ns)
-            entry["expected"] = fmt(expected)
+            actual, logs = invoke(UserSolution, method, args, params, ret_ann, user_ns, declared)
         except Unsupported as exc:
             report["ok"] = False
             report["unsupported"] = True
             report["error"] = str(exc)
             print(json.dumps(report))
             return
-        except Exception:
-            entry["status"] = "oracle_error"
-            entry["error"] = traceback.format_exc(limit=3)
-            report["cases"].append(entry)
-            continue
-
-        started = time.perf_counter()
-        try:
-            actual, logs = invoke(UserSolution, method, args, params, ret_ann, user_ns)
         except Exception:
             entry["status"] = "error"
             entry["elapsed_ms"] = (time.perf_counter() - started) * 1000
@@ -675,16 +830,7 @@ def main():
         entry["actual"] = fmt(actual)
         if logs:
             entry["stdout"] = logs
-
-        if actual == expected:
-            entry["status"] = "pass"
-        elif canonical(actual) == canonical(expected):
-            # Many problems accept any ordering; the real judge decides, so we
-            # surface this as a pass but say the ordering differed.
-            entry["status"] = "pass_unordered"
-        else:
-            entry["status"] = "fail"
-
+        judge(entry, actual, expected, judged)
         report["cases"].append(entry)
 
     print(json.dumps(report))

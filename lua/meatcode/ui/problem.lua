@@ -92,7 +92,7 @@ local function attach_problem_metadata(problem, meta)
   problem.companies = union(problem.companies, meta.companies)
 end
 
-local function fetch_provider_meta(problem, provider_name, lang, cb)
+local function fetch_provider_meta(problem, provider_name, lang, cb, status)
   providers.ensure_id(problem, provider_name, function(resolve_err, id)
     if resolve_err then return cb(resolve_err, nil) end
     if not id then return cb("problem is unavailable on " .. providers.get(provider_name).label, nil) end
@@ -103,34 +103,123 @@ local function fetch_provider_meta(problem, provider_name, lang, cb)
 
     local path = meta_cache_path(provider_name, id)
     local cached = util.read_json(path)
-    if cached then
+    local backend = providers.get(provider_name)
+    local has_lang = cached and type(cached.starterCode) == "table"
+      and type(cached.starterCode[lang]) == "string"
+    local has_sources = provider_name == "neetcode"
+      or provider_name == "leetcode"
+        and type(cached and cached.editorial_solutions) == "table"
+        and cached.editorial_solutions[lang] ~= nil
+        and type(cached.community_solutions) == "table"
+        and cached.community_solutions[lang] ~= nil
+      or provider_name == "lintcode"
+        and type(cached and cached.community_solutions) == "table"
+        and cached.community_solutions[lang] ~= nil
+    if cached and cached.schema == util.META_SCHEMA and has_lang and has_sources then
+      if status then status("Using cached " .. backend.label .. " metadata and oracle candidates.") end
       attach_problem_metadata(problem, cached)
       return cb(nil, cached)
     end
-    providers.get(provider_name).fetch(problem, lang, function(err, meta)
+    backend.fetch(problem, lang, function(err, meta)
       if err then return cb(err, nil) end
-      util.write_json(path, meta)
-      attach_problem_metadata(problem, meta)
-      cb(nil, meta)
+      local function finish(enrich_err)
+        if enrich_err then return cb(enrich_err, nil) end
+        util.write_json(path, meta)
+        attach_problem_metadata(problem, meta)
+        cb(nil, meta)
+      end
+      if backend.enrich then
+        backend.enrich(problem, lang, meta, finish, status)
+      else
+        finish()
+      end
     end)
   end)
 end
 
---- NeetCode's reference implementation remains the local-test oracle even
---- when another provider supplies the visible cases and statement.
-local function fetch_meta(problem, provider_name, lang, cb)
-  fetch_provider_meta(problem, provider_name, lang, function(err, meta)
-    if err or provider_name == "neetcode" or not providers.available(problem, "neetcode") then
-      return cb(err, meta)
-    end
-    fetch_provider_meta(problem, "neetcode", lang, function(_, nc)
-      if nc then
-        meta.referenceSolution = nc.referenceSolution
-        meta.test_case_count = meta.test_case_count or nc.test_case_count
+local ORACLE_STAGES = { "reference", "editorial", "community" }
+
+--- Build stage-major candidates. Provider preference only breaks ties inside a
+--- stage: a NeetCode reference therefore beats a preferred LeetCode editorial.
+local function merge_oracles(base, metas, order, lang)
+  base.oracle_candidates = {}
+  base.oracle_answers = {}
+  for _, stage in ipairs(ORACLE_STAGES) do
+    local candidates = {}
+    for _, provider_name in ipairs(order) do
+      local meta = metas[provider_name]
+      if meta then
+        local values
+        if stage == "reference" then
+          local code = type(meta.solutions) == "table" and meta.solutions[lang] or nil
+          values = type(code) == "string" and { code } or {}
+        elseif stage == "editorial" then
+          values = type(meta.editorial_solutions) == "table"
+            and meta.editorial_solutions[lang] or {}
+        else
+          values = type(meta.community_solutions) == "table"
+            and meta.community_solutions[lang] or {}
+        end
+        for _, value in ipairs(type(values) == "table" and values or {}) do
+          local code = type(value) == "table" and value.code or value
+          if type(code) == "string" and vim.trim(code) ~= "" then
+            table.insert(candidates, {
+              stage = stage,
+              provider = provider_name,
+              code = code,
+              id = type(value) == "table" and value.id or nil,
+            })
+          end
+        end
       end
-      cb(nil, meta)
-    end)
-  end)
+    end
+    base.oracle_candidates[stage] = candidates
+  end
+  for _, provider_name in ipairs(order) do
+    local meta = metas[provider_name]
+    local cases = meta and meta.custom_test_cases or {}
+    for i, output in ipairs(meta and meta.expected_outputs or {}) do
+      if type(cases[i]) == "string" and type(output) == "string" and output ~= "" then
+        table.insert(base.oracle_answers, {
+          provider = provider_name, input = cases[i], output = output,
+        })
+      end
+    end
+  end
+end
+
+--- Fetch every provider in the content fallback chain, then apply stage-major
+--- oracle precedence across them. Metadata failures from optional providers do
+--- not prevent the selected content provider from opening.
+local function fetch_meta(problem, provider_name, lang, cb, status)
+  if status then status("Loading statement, starter and examples from "
+      .. providers.get(provider_name).label .. "…") end
+  fetch_provider_meta(problem, provider_name, lang, function(err, base)
+    if err then return cb(err, base) end
+    local order = providers.candidates(problem, "content")
+    if not vim.tbl_contains(order, provider_name) then table.insert(order, 1, provider_name) end
+    local metas, index = { [provider_name] = base }, 1
+    local function step()
+      local name = order[index]
+      index = index + 1
+      if not name then
+        merge_oracles(base, metas, order, lang)
+        return cb(nil, base)
+      end
+      if metas[name] then return step() end
+      if status then status("Checking " .. providers.get(name).label
+          .. " for stronger oracle stages…") end
+      fetch_provider_meta(problem, name, lang, function(provider_err, meta)
+        if provider_err and status then
+          status(providers.get(name).label
+            .. " unavailable; continuing with the remaining sources.")
+        end
+        if meta then metas[name] = meta end
+        step()
+      end, status)
+    end
+    step()
+  end, status)
 end
 
 local function solution_path(problem, lang)
@@ -149,9 +238,10 @@ end
 local function render_ready(s)
   local keys = config.options.keys.problem
   local submit_backend = providers.get(s.submit_provider)
-  local local_note = providers.available(s.problem, "neetcode") and s.meta.referenceSolution
-    and "Local runs diff your output against NeetCode's reference solution."
-    or "No local oracle is available; submit to run the hidden suite."
+  local oracle = runner.oracle(s.meta, s.lang)
+  local local_note = oracle
+      and "Local oracle order: reference → editorial → community → statement answers."
+    or "No local starter is available; submit to run the hidden suite."
   local entries = {
     { keys.run, "run local tests" },
     { keys.submit, "submit to " .. submit_backend.label },
@@ -382,9 +472,8 @@ function M.run()
   if s.busy then
     return util.notify("already running")
   end
-  local neetcode_id = providers.id(s.problem, "neetcode")
-  if not neetcode_id or not s.meta.referenceSolution then
-    return util.err("local tests need a matching NeetCode problem — submit this problem instead")
+  if not runner.oracle(s.meta, s.lang) then
+    return util.err("no local oracle for this problem — submit it instead")
   end
   save(s)
 
@@ -392,13 +481,20 @@ function M.run()
   s.busy = true
   results.running(s.res_buf, "Running " .. #cases .. " local test case" .. (#cases == 1 and "" or "s"))
 
-  runner.run(neetcode_id, current_code(s), s.lang, s.meta, cases, function(result)
+  runner.run(providers.filename(s.problem), current_code(s), s.lang, s.meta, cases, function(result)
     s.busy = false
+    s.last_oracle = {
+      stage = result.oracle_stage, provider = result.oracle_provider, id = result.oracle_id,
+    }
     vim.schedule(function()
       if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
         results.render_run(s.res_buf, result)
       end
     end)
+  end, function(message)
+    if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+      results.running(s.res_buf, message)
+    end
   end)
 end
 
@@ -408,6 +504,43 @@ local function accepted(s)
   pcall(render_description, s)
   pcall(function() require("meatcode.ui.roadmap").refresh() end)
   pcall(function() require("meatcode.ui.list").refresh() end)
+end
+
+local function revalidate_community(s, submission)
+  if not submission.learned or not s.last_oracle
+    or s.last_oracle.stage ~= "community" then
+    return false
+  end
+  local cases = test_cases(s)
+  table.insert(cases, s.failed_input)
+  s.busy = true
+  submission.oracle_update = "Revalidating community oracle against the newly learned answer…"
+  results.render_submit(s.res_buf, submission)
+  runner.revalidate(providers.filename(s.problem), s.lang, s.meta, cases, function(info)
+    s.busy = false
+    s.last_oracle = info
+    if info.stage == "community" then
+      submission.oracle_update = info.rejected > 0
+          and string.format("Rejected %d community oracle(s); switched to %s community solution.",
+            info.rejected, info.provider or "the next")
+        or "The current community oracle still passes the newly learned case."
+    elseif info.stage == "expected" then
+      submission.oracle_update = string.format(
+        "Rejected %d community oracle(s); falling back to known answers.", info.rejected)
+    else
+      submission.oracle_update = string.format(
+        "Community oracle replaced by %s %s solution.", info.provider or "local", info.stage)
+    end
+    if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+      results.render_submit(s.res_buf, submission)
+    end
+  end, function(message)
+    submission.oracle_update = message .. "…"
+    if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+      results.render_submit(s.res_buf, submission)
+    end
+  end)
+  return true
 end
 
 function M.submit()
@@ -436,8 +569,18 @@ function M.submit()
       local submission = backend.normalize_submission(data)
       s.failed_input = type(submission.failed_input) == "string"
         and vim.trim(submission.failed_input) ~= "" and submission.failed_input or nil
+      if s.failed_input and runner.learn(
+        providers.filename(s.problem), s.failed_input, submission.expected) then
+        -- The judge disclosed this answer. Future local runs can grade the same
+        -- input even when no executable source survives oracle selection.
+        submission.learned = true
+      end
       results.render_submit(s.res_buf, submission)
-      if submission.accepted then accepted(s) end
+      if submission.accepted then
+        accepted(s)
+      else
+        revalidate_community(s, submission)
+      end
     end)
   end)
 end
@@ -701,6 +844,16 @@ function M.links()
   local s = ready()
   if not s then return end
   require("meatcode.ui.links").open(s.problem)
+end
+
+--- The providers actually serving the open problem. The chain is a fallback
+--- order, so the provider in use is often not the topmost one: a problem the
+--- first choice does not carry falls through to the next.
+---@return {content: string, submit: string, name: string}|nil
+function M.active()
+  local s = current_session()
+  if not s then return nil end
+  return { content = s.content_provider, submit = s.submit_provider, name = s.problem.name }
 end
 
 function M.configure()
@@ -1055,7 +1208,10 @@ function M.open(problem, opts)
         util.err("could not load problem: " .. tostring(last_error or "no provider succeeded"))
       end)
     end
-    util.notify("loading " .. problem.name .. " from " .. providers.get(provider).label .. "…")
+    local function status(message)
+      vim.schedule(function() util.notify(message) end)
+    end
+    status("Opening " .. problem.name .. " from " .. providers.get(provider).label .. "…")
     fetch_meta(problem, provider, lang, function(err, meta)
       if err then
         if forced then
@@ -1100,6 +1256,7 @@ function M.open(problem, opts)
           drawn = {},
         }
         util.mkdirp(vim.fs.dirname(s.path))
+        status("Preparing the local solution and language-server support…")
         seed_file(s, s.path, function()
           if session_alive(sessions[key]) then
             opening[key] = nil
@@ -1111,10 +1268,11 @@ function M.open(problem, opts)
           render_description(s)
           keymaps(s)
           render_ready(s)
+          status("Ready: local runs will resolve reference → editorial → community → statement.")
           discover_providers(s)
         end)
       end)
-    end)
+    end, status)
   end
 
   start_next()

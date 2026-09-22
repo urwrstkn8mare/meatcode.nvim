@@ -1,5 +1,6 @@
 local auth = require("meatcode.api.auth")
 local client = require("meatcode.api.client")
+local util = require("meatcode.util")
 
 --- Typed wrappers over the NeetCode backend.
 ---
@@ -30,6 +31,7 @@ function M.problem(problem_id, cb)
     if not data then
       return cb("unknown problem: " .. problem_id, nil)
     end
+    data.schema = util.META_SCHEMA
     cb(nil, data)
   end)
 end

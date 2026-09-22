@@ -1,6 +1,8 @@
 local auth = require("meatcode.api.lintcode_auth")
 local client = require("meatcode.api.client")
 local config = require("meatcode.config")
+local examples = require("meatcode.api.examples")
+local util = require("meatcode.util")
 
 local M = {}
 
@@ -107,8 +109,25 @@ function M.problem(problem_id, lang, cb)
         end
       end
       local code = type(starter) == "table" and starter.code or ""
+
+      -- LintCode's own `testcase_sample` is the visible input with no expected
+      -- output attached, so it can be run but not judged. The statement's
+      -- examples carry both halves, so they are preferred when present.
+      local cases, outputs = {}, {}
+      for _, example in ipairs(examples.lintcode(data.example)) do
+        table.insert(cases, examples.normalize_lintcode_input(example.input))
+        -- Statements write booleans the way Python does.
+        local output = example.output:gsub("^True$", "true"):gsub("^False$", "false")
+        table.insert(outputs, output)
+      end
+      if #cases == 0 and type(data.testcase_sample) == "string"
+        and vim.trim(data.testcase_sample) ~= "" then
+        cases = { examples.normalize_lintcode_input(data.testcase_sample) }
+      end
+
       cb(nil, {
         provider = "lintcode",
+        schema = util.META_SCHEMA,
         question_id = id,
         name = data.title or data.unique_name,
         slug = data.unique_name,
@@ -117,13 +136,57 @@ function M.problem(problem_id, lang, cb)
         description = description(data),
         starterCode = { [lang] = type(code) == "string" and code or "" },
         availableLanguages = available,
-        custom_test_cases = type(data.testcase_sample) == "string" and { data.testcase_sample } or {},
+        custom_test_cases = cases,
+        expected_outputs = outputs,
+        test_case_type = "function",
         test_case_count = 0,
         topics = tag_names(data.tags),
         companies = tag_names(data.company_tags),
       })
     end)
   end)
+end
+
+--- Community solutions ordered by popularity. LintCode pins highlighted posts,
+--- so walk the full list and sort by the actual like counter locally.
+function M.community_solutions(problem_id, lang, cb)
+  local all, page = {}, 1
+  local function finish()
+    table.sort(all, function(a, b)
+      local al, bl = tonumber(a.like_count) or 0, tonumber(b.like_count) or 0
+      if al ~= bl then return al > bl end
+      return (tonumber(a.id) or 0) < (tonumber(b.id) or 0)
+    end)
+    local out = {}
+    for _, row in ipairs(all) do
+      for _, code in ipairs(examples.code_blocks(row.content, lang)) do
+        table.insert(out, {
+          code = code,
+          id = tostring(row.id or ""),
+          votes = tonumber(row.like_count) or 0,
+          official = row.is_official == true,
+        })
+      end
+    end
+    cb(nil, out)
+  end
+  local function step()
+    local url = string.format(
+      "%s/new/api/solution-code/?problem_id=%s&page=%d&page_size=100",
+      API, vim.uri_encode(tostring(problem_id), "rfc2396"), page)
+    request("community solutions", { url = url }, function(err, rows, envelope)
+      if err then return cb(err, nil) end
+      rows = type(rows) == "table" and rows or {}
+      vim.list_extend(all, rows)
+      local count = tonumber(envelope and envelope.count) or #all
+      if #all < count and #rows > 0 then
+        page = page + 1
+        return vim.defer_fn(step, 50)
+      end
+      finish()
+    end)
+  end
+  step()
 end
 
 --- Resolve the numeric LintCode id using the redirect maintained for LeetCode slugs.
@@ -187,6 +250,41 @@ function M.submit(problem_id, code, lang, cb)
     if not id then return cb("LintCode rejected the submission", nil) end
     poll(id, math.max(30, math.floor(config.options.timeout or 30)), cb)
   end)
+end
+
+--- LintCode's numeric verdict for an accepted submission.
+local ACCEPTED_STATUS = 1
+
+--- One page of the account's accepted submissions, newest first.
+---
+--- The same endpoint the site's own submission history uses; `status=1` filters
+--- server-side to accepted verdicts, so a walk only pages over completions.
+--- Rows carry `id`, `problem_id`, `problem_unique_name`, `language` and a UTC
+--- `created_at`.
+---@param page integer 1-based
+---@param page_size integer
+---@param cb fun(err: string|nil, page: {rows: table[], count: integer, has_next: boolean}|nil)
+function M.accepted_page(page, page_size, cb)
+  if not auth.is_logged_in() then
+    return cb("not logged in to LintCode — run :MeatCode login lintcode", nil)
+  end
+  local url = string.format("%s/v2/api/submissions/?_format=new&page=%d&page_size=%d&status=%d",
+    API, page, page_size, ACCEPTED_STATUS)
+  request("submission history", { url = url }, function(err, rows, envelope)
+    if err then return cb(err, nil) end
+    if type(rows) ~= "table" then return cb("LintCode returned an unexpected submission list", nil) end
+    local count = tonumber(envelope and envelope.count) or #rows
+    cb(nil, {
+      rows = rows,
+      count = count,
+      has_next = (envelope and envelope.next ~= nil and envelope.next ~= vim.NIL) or false,
+    })
+  end)
+end
+
+--- The local language name for one of LintCode's, or nil when unsupported.
+function M.local_lang(remote)
+  return LINTCODE_TO_LANG[remote]
 end
 
 return M

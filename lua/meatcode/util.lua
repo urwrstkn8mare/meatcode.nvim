@@ -1,5 +1,10 @@
 local M = {}
 
+--- Bumped whenever a provider's problem metadata grows a field the runner
+--- depends on, so caches written by an older version are refetched instead of
+--- silently running without it.
+M.META_SCHEMA = 3
+
 function M.notify(msg, level)
   vim.notify(msg, level or vim.log.levels.INFO, { title = "MeatCode" })
 end

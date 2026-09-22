@@ -86,10 +86,37 @@ query questionData($titleSlug: String!) {
 - `codeSnippets` is the starter code per language; `langSlug` is LeetCode's
   name for the language (`python3`, `golang`, `mysql`, ...) and is mapped to
   the plugin's own names.
-- `exampleTestcaseList` is the visible cases. Expected outputs are not
-  included, which is exactly why local runs go through NeetCode's reference
-  solution.
+- `exampleTestcaseList` is the visible input list. Expected outputs are not
+  separate fields; the conservative statement parser recovers them from
+  `content`.
 - `metaData` is a JSON string describing parameter names and types.
+
+
+### Official editorials and community solutions
+
+```graphql
+question(titleSlug: $slug) {
+  solution { canSeeDetail paidOnly content }
+}
+allPlaygroundCodes(uuid: $uuid) { code langSlug }
+```
+
+Free editorial content embeds each approach as
+`/playground/<uuid>/shared`; `allPlaygroundCodes` supplies the runnable
+language variants. Premium-gated editorials have no visible content and fall
+through.
+
+```graphql
+questionSolutions(filters: {
+  questionSlug: $slug, first: 30, skip: 0, orderBy: most_votes
+}) {
+  solutions { id title solutionTags { name } post { content } }
+}
+```
+
+Community posts are already vote-ordered. Language-labelled fenced blocks are
+extracted, but are only retained as candidates: the local runner must execute
+each against every known visible answer before trusting it as an oracle.
 
 ### Daily problem and streak
 

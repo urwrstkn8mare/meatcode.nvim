@@ -23,6 +23,16 @@ function M.fetch(problem, lang, cb)
   api.problem(problem_id, lang, cb)
 end
 
+function M.enrich(problem, lang, meta, cb, status)
+  meta.community_solutions = meta.community_solutions or {}
+  if status then status("Checking LintCode's most-liked community solutions…") end
+  api.community_solutions(id(problem), lang, function(err, codes)
+    if err and status then status("LintCode community solutions unavailable; continuing.") end
+    if not err then meta.community_solutions[lang] = codes or {} end
+    cb(nil, meta)
+  end)
+end
+
 function M.submit(problem, meta, code, lang, cb)
   api.submit(id(problem), code, lang, cb)
 end

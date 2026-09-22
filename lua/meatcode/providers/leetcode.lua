@@ -17,6 +17,29 @@ function M.fetch(problem, lang, cb)
   api.problem(slug, cb)
 end
 
+--- Add executable oracle candidates that live outside the question payload.
+function M.enrich(problem, lang, meta, cb, status)
+  local pending = 2
+  local function done()
+    pending = pending - 1
+    if pending == 0 then cb(nil, meta) end
+  end
+  meta.editorial_solutions = meta.editorial_solutions or {}
+  meta.community_solutions = meta.community_solutions or {}
+  if status then status("Checking LeetCode's official editorial…") end
+  api.editorial_solutions(id(problem), lang, function(err, codes)
+    if err and status then status("LeetCode editorial unavailable; continuing.") end
+    if not err then meta.editorial_solutions[lang] = codes or {} end
+    done()
+  end)
+  if status then status("Checking LeetCode's most-voted community solutions…") end
+  api.community_solutions(id(problem), lang, function(err, codes)
+    if err and status then status("LeetCode community solutions unavailable; continuing.") end
+    if not err then meta.community_solutions[lang] = codes or {} end
+    done()
+  end)
+end
+
 function M.submit(problem, meta, code, lang, cb)
   api.submit(id(problem), meta.question_id, code, lang, cb)
 end

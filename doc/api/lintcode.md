@@ -107,6 +107,20 @@ plugin follows it through `curl`'s effective URL, then persists the mapping in
 Title matching covers the rest at catalog-merge time, but only when a title is
 unique on both sides.
 
+### Community solutions
+
+```
+GET https://apiv1.lintcode.com/new/api/solution-code/
+    ?problem_id=<id>&page=1&page_size=100
+```
+Rows carry `content`, `languages`/`languages_types`, `like_count`,
+`is_official` and `is_highlight`. The plugin pages to the envelope `count`.
+Because the endpoint pins highlighted rows ahead of ordinary ones, it then
+sorts the complete result by `like_count` and extracts the requested
+`[[python]]` or `[[cpp]]` sections from LintCode's multi-language fenced
+blocks. These remain untrusted candidates until they pass
+every visible case with a known expected output.
+
 ## Submitting
 
 ```
@@ -125,6 +139,22 @@ GET https://apiv1.lintcode.com/new/api/submissions/refresh/?id=<id>
 
 A submission is finished when `judge_finished`/`judgeFinished` is true. The
 verdict names arrive in either snake_case or camelCase, so the adapter reads
-both. An accepted verdict records a completion through the normal provider
-path; LintCode account history is not walked, so only submissions made through
-the plugin count.
+both.
+
+## Submission history
+
+```
+GET https://apiv1.lintcode.com/v2/api/submissions/?_format=new&page=<n>&page_size=<k>&status=1
+-> {"count": 41, "next": "...", "previous": null, "data": [
+     {"id": 34707959, "status": 1, "language": "python3",
+      "created_at": "2026-09-22T09:17:22.291120Z", "problem_id": 1,
+      "problem_title": "A + B Problem", "problem_unique_name": "a-b-problem",
+      "time_cost": 81, ...}]}
+```
+
+`status=1` is the accepted verdict and filters server-side, so a history walk
+only pages over completions. The rows are newest first, `created_at` is UTC,
+and `problem_id` is the same numeric id the problem endpoints take — which is
+how a row is matched to the merged catalog and recorded as a completion day.
+Paging stops at the last-recorded submission id, so an incremental check costs
+one request.

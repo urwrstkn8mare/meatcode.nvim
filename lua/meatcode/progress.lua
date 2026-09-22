@@ -2,6 +2,7 @@ local catalog = require("meatcode.catalog")
 local config = require("meatcode.config")
 local lang_info = require("meatcode.lang")
 local leetcode_api = require("meatcode.api.leetcode")
+local lintcode_api = require("meatcode.api.lintcode")
 local problem_catalog = require("meatcode.catalog.problems")
 local nc_api = require("meatcode.api")
 local providers = require("meatcode.providers")
@@ -45,6 +46,7 @@ local function load_cache()
   state.cursors = {
     leetcode = type(cursors) == "table" and type(cursors.leetcode) == "table" and cursors.leetcode or {},
     neetcode = type(cursors) == "table" and type(cursors.neetcode) == "table" and cursors.neetcode or {},
+    lintcode = type(cursors) == "table" and type(cursors.lintcode) == "table" and cursors.lintcode or {},
   }
   return state.completions
 end
@@ -295,6 +297,85 @@ function M.sync_neetcode(lang, cb, on_progress)
   end)
 end
 
+-- LintCode pages its submission history; 20 rows matches the site's own feed
+-- closely enough to keep an incremental check to a single request.
+local LINTCODE_PAGE_SIZE = 20
+local MAX_LINTCODE_PAGES = 1000
+
+--- Seconds to add to a UTC timestamp to reach local time.
+local function utc_offset(now)
+  return os.difftime(now, os.time(os.date("!*t", now)))
+end
+
+--- The local calendar day of a UTC ISO-8601 instant.
+---@param iso string e.g. "2026-09-22T09:17:22.291120Z"
+---@return string|nil day "YYYY-MM-DD"
+local function local_day(iso)
+  if type(iso) ~= "string" then return nil end
+  local y, mo, d, h, mi, s = iso:match("^(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)")
+  if not y then return nil end
+  local as_local = os.time({
+    year = tonumber(y), month = tonumber(mo), day = tonumber(d),
+    hour = tonumber(h), min = tonumber(mi), sec = tonumber(s), isdst = false,
+  })
+  return os.date("%Y-%m-%d", as_local + utc_offset(as_local))
+end
+
+--- Fetch and record accepted LintCode submissions in `lang`.
+---
+--- Incremental the same way LeetCode is: paging stops as soon as the
+--- last-recorded submission id reappears, so a launch with nothing new costs
+--- one request. LintCode filters to accepted verdicts server-side, so every row
+--- walked is a completion; rows in another language are skipped, and rows for a
+--- problem missing from the merged catalog cannot be keyed and are skipped too.
+---@param lang string
+---@param cb fun(err: string|nil, totals: {checked: integer, recorded: integer}|nil)
+---@param on_progress fun(checked: integer, recorded: integer)|nil
+function M.sync_lintcode(lang, cb, on_progress)
+  load_cache()
+  problem_catalog.load()
+  local stop_at_id = state.cursors.lintcode[lang]
+  local checked, recorded, newest_id = 0, 0, nil
+
+  local function finish(err, result)
+    if not err and newest_id then
+      state.cursors.lintcode[lang] = newest_id
+      persist()
+    end
+    cb(err, result)
+  end
+
+  local function step(page)
+    if page > MAX_LINTCODE_PAGES then
+      return finish(nil, { checked = checked, recorded = recorded, truncated = true })
+    end
+    lintcode_api.accepted_page(page, LINTCODE_PAGE_SIZE, function(err, data)
+      if err then
+        return finish(err, nil)
+      end
+      for _, sub in ipairs(data.rows) do
+        if stop_at_id and sub.id == stop_at_id then
+          return finish(nil, { checked = checked, recorded = recorded })
+        end
+        newest_id = newest_id or sub.id -- the feed is newest-first
+        checked = checked + 1
+        local day = local_day(sub.created_at)
+        local entry = sub.problem_id and problem_catalog.find("lintcode", sub.problem_id)
+        if day and entry and lintcode_api.local_lang(sub.language) == lang
+          and M.record_acceptance(entry, lang, day) then
+          recorded = recorded + 1
+        end
+      end
+      if on_progress then on_progress(checked, recorded) end
+      if data.has_next and #data.rows > 0 then
+        return vim.defer_fn(function() step(page + 1) end, SYNC_DELAY_MS)
+      end
+      finish(nil, { checked = checked, recorded = recorded })
+    end)
+  end
+  step(1)
+end
+
 --- Throttled "still working" notifier for a long first-time walk. Silent for
 --- a fast incremental check (the common case), since it rarely reaches
 --- `PROGRESS_EVERY` submissions checked before finishing.
@@ -324,14 +405,15 @@ function M.check_new(lang, cb)
 
   local run_leetcode = providers.get("leetcode").auth.is_logged_in()
   local run_neetcode = providers.get("neetcode").auth.is_logged_in()
-  if not run_leetcode and not run_neetcode then
+  local run_lintcode = providers.get("lintcode").auth.is_logged_in()
+  if not run_leetcode and not run_neetcode and not run_lintcode then
     return cb(nil, { checked = 0, recorded = 0 })
   end
 
   util.notify(string.format("checking for new %s submissions…", lang_info.name(lang)))
 
-  local errors, pending = {}, (run_leetcode and 1 or 0) + (run_neetcode and 1 or 0)
-  local totals = { checked = 0, recorded = 0 }
+  local errors, pending = {},
+    (run_leetcode and 1 or 0) + (run_neetcode and 1 or 0) + (run_lintcode and 1 or 0)
   local function done(label, err, result)
     if err then
       table.insert(errors, label .. ": " .. err)
@@ -363,6 +445,10 @@ function M.check_new(lang, cb)
   if run_neetcode then
     M.sync_neetcode(lang, function(err, result) done("NeetCode", err, result) end,
       progress_reporter("NeetCode"))
+  end
+  if run_lintcode then
+    M.sync_lintcode(lang, function(err, result) done("LintCode", err, result) end,
+      progress_reporter("LintCode"))
   end
 end
 
