@@ -2,13 +2,19 @@ local availability = require("meatcode.catalog.availability")
 local catalog = require("meatcode.catalog.problems")
 local config = require("meatcode.config")
 local lang_info = require("meatcode.lang")
+local pages = require("meatcode.ui.pages")
 local progress = require("meatcode.progress")
 local providers = require("meatcode.providers")
 local util = require("meatcode.util")
 
 local M = {}
 
-local state = { picker = nil, prompt_buf = nil, subscribed = false, from_home = false }
+--- `page_buf` is a placeholder backdrop registered with the page stack so
+--- back-navigation (closing a problem opened from here, or q on the list
+--- itself) lands on the list rather than falling through to whatever page
+--- was under it. The floating picker is the real UI; the page only exists
+--- for bookkeeping and gets relaunched via `on_show`.
+local state = { picker = nil, prompt_buf = nil, page_buf = nil, query = nil, subscribed = false }
 
 local function streak_text()
   local provider = providers.get("leetcode")
@@ -100,6 +106,21 @@ local function picker_open()
   return state.prompt_buf and vim.api.nvim_buf_is_valid(state.prompt_buf)
 end
 
+local function is_current_page()
+  return state.page_buf and pages.buf() == state.page_buf
+end
+
+--- Close the floating picker windows without touching the page stack —
+--- reused by the picker's own q/<Esc>/select handlers and by the page's
+--- `on_close` (fired if something else pops/clears the stack out from
+--- under us, e.g. `:MeatCode` navigating elsewhere).
+local function close_picker()
+  if not picker_open() then return end
+  local modules = telescope()
+  if modules then pcall(modules["telescope.actions"].close, state.prompt_buf) end
+  state.prompt_buf, state.picker = nil, nil
+end
+
 local function title()
   local cat = catalog.get()
   return string.format(" Problems · %d merged · LC %d · NC %d · LI %d · %s ",
@@ -156,6 +177,7 @@ local function watch_hover(actions)
 end
 
 local function open_picker(query)
+  state.query = query
   local modules, err = telescope()
   if not modules then return util.err(err) end
   local actions = modules["telescope.actions"]
@@ -172,14 +194,17 @@ local function open_picker(query)
     sorting_strategy = "ascending",
     layout_strategy = "vertical",
     layout_config = { width = 9999, height = 9999, prompt_position = "top" },
+    -- No border/rounded chrome: this is meant to read as a page like the
+    -- roadmap, not a floating popup over one.
+    border = false,
     attach_mappings = function(prompt_buf, map)
       state.prompt_buf = prompt_buf
-      local closed = false
       local function close()
-        if closed then return end
-        closed = true
-        pcall(actions.close, prompt_buf)
-        if state.prompt_buf == prompt_buf then state.prompt_buf, state.picker = nil, nil end
+        close_picker()
+      end
+      local function back()
+        close()
+        if is_current_page() then pages.pop() end
       end
       local function open_selected(problem)
         local key = providers.problem_key(problem)
@@ -223,9 +248,9 @@ local function open_picker(query)
       end
       map("i", "<C-o>", open_browser)
       map("n", "o", open_browser)
-      map("i", "<Esc>", close)
-      map("n", "q", close)
-      map("n", "<Esc>", close)
+      map("i", "<Esc>", back)
+      map("n", "q", back)
+      map("n", "<Esc>", back)
       watch_hover(actions)
       return true
     end,
@@ -244,6 +269,18 @@ function M.open(query)
     local win = vim.fn.bufwinid(state.prompt_buf)
     if win ~= -1 then vim.api.nvim_set_current_win(win) end
     return
+  end
+
+  if not is_current_page() then
+    if not (state.page_buf and vim.api.nvim_buf_is_valid(state.page_buf)) then
+      state.page_buf = vim.api.nvim_create_buf(false, true)
+      vim.bo[state.page_buf].bufhidden = "hide"
+    end
+    pages.push({
+      id = "list", buf = state.page_buf, title = "list",
+      on_show = function() if not picker_open() then open_picker(state.query) end end,
+      on_close = close_picker,
+    })
   end
 
   local function ready(err, cat)

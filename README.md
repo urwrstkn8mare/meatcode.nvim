@@ -126,6 +126,8 @@ the roadmap for the full set).
 - More languages (i.e. Rust)
 - Notes per problem, kept beside the solution file
 - A solved/attempted filter in the finder, driven by the shared history
+- Support for other notifier plugins (nvim-notify, snacks, noice) beyond
+  fidget.nvim's optional integration ([more](README.md#requirements))
 
 ## Notes and thanks
 
