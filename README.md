@@ -114,19 +114,21 @@ solution on the right, results underneath.
 | `<leader>na` | Add the last failed submission input as a local case |
 | `<leader>nR` | Reset the solution to the starter code |
 | `<leader>no` | Fuzzy-pick a provider/solution/video link and open it in the browser |
-| `<leader>nd` | Cycle the statement, starter code, and judge through `provider_order` |
+| `<leader>nc` | Reorder the content/submit fallback chains (persisted as default) |
+| `<leader>nd` | Cycle the statement/tests/starter through the content chain |
 | `<CR>` or `<Tab>` | In the statement: open the hint, link, or diagram under the cursor |
 | `q` | Close the problem |
 
 ## How it works
 
-**Three providers, one problem.** Statements, starter code and submissions come
-from the first provider in `provider_order` that has the problem and can open it:
-paid-only problems fall through to the next provider unless that provider is
-unlocked (any login for NeetCode/LintCode, Premium for LeetCode). `<leader>nd`
-cycles an open problem through the chain by hand; the empty results panel always
-lists the current keys. `<leader>no` fuzzy-picks a link instead of opening a
-fixed page, so LintCode-only problems get browser links too.
+**Three providers, one problem.** Statements, tests, and starter code come from
+the first provider in the content chain that has the problem and can open it;
+`<leader>ns` submits to the first provider in the submit chain. Both chains are
+edited with `<leader>nc` and persist as the default — there is no config option.
+Paid-only problems fall through unless unlocked (any login for NeetCode/LintCode,
+Premium for LeetCode). `<leader>nd` cycles content by hand without touching your
+WIP solution; only `<leader>nR` replaces it. The empty results panel always lists
+the current keys, and `<leader>no` fuzzy-picks a link (Telescope when installed).
 
 **Your solution is a real file on disk**, at
 `stdpath("data")/meatcode/solutions/<topic>/<problem>.<ext>`, so your LSP,

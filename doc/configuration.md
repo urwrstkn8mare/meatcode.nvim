@@ -12,10 +12,6 @@ require("meatcode").setup({
   -- Language used for starter code, local runs and submissions.
   lang = "python",
 
-  -- Provider fallback order: the sequence an open problem tries, and the
-  -- order <leader>nd cycles through. Completion keys and solution filenames
-  -- stay on the canonical leetcode/neetcode/lintcode order either way.
-  provider_order = { "leetcode", "neetcode", "lintcode" },
   -- Solutions are written to <dir>/<topic-slug>/<problem-id>.<ext>
   solutions_dir = vim.fn.stdpath("data") .. "/meatcode/solutions",
 
@@ -73,6 +69,7 @@ require("meatcode").setup({
       test_failed = "<leader>na",
       reset = "<leader>nR",
       links = "<leader>no",
+      configure = "<leader>nc",
       switch_provider = "<leader>nd",
       quit = "q",
     },

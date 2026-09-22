@@ -16,7 +16,7 @@ CONTENTS                                                          *meatcode*
 
 Browse the NeetCode roadmap and the merged LeetCode/NeetCode/LintCode catalog,
 solve problems in real buffers, run matching NeetCode visible cases locally,
-and submit through the first provider in `provider_order` that can open them.
+and submit through the first provider in the submit chain that can open them.
 
 Local runs work because NeetCode exposes its own reference solution for every
 problem. Your code and the reference are executed over the same inputs and the
@@ -110,11 +110,11 @@ Problem finder ~
 
 Solving ~
   <leader>nr            Run visible cases locally when available
-  <leader>ns            Submit through the active provider
-  <leader>nR            Reset to the selected provider's starter code
+  <leader>ns            Submit through the submit chain's judge
+  <leader>nR            Reset to the content provider's starter code
   <leader>no            Fuzzy-pick a provider/solution/video link
-  <leader>nd            Cycle the statement, starter code, and judge
-                        through `provider_order`
+  <leader>nc            Reorder the content/submit fallback chains
+  <leader>nd            Cycle statement/tests/starter through content
   <CR> or <Tab>         Statement window: toggle the hint under the cursor, or
                         follow the link under it via |vim.ui.open()|.
   q                     Close the problem (statement/results windows)
@@ -170,7 +170,6 @@ Defaults: >lua
     {
       list = "neetcode150",
       lang = "python",
-      provider_order = { "leetcode", "neetcode", "lintcode" },
       solutions_dir = vim.fn.stdpath("data") .. "/meatcode/solutions",
       cache_dir = vim.fn.stdpath("cache") .. "/meatcode",
       catalog_max_age = 24 * 60 * 60,
@@ -197,7 +196,8 @@ Defaults: >lua
           run = "<leader>nr", submit = "<leader>ns",
           tests = "<leader>nt", test_failed = "<leader>na",
           reset = "<leader>nR",
-          links = "<leader>no", switch_provider = "<leader>nd",
+          links = "<leader>no", configure = "<leader>nc",
+          switch_provider = "<leader>nd",
           quit = "q",
         },
       },
