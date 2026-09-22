@@ -8,7 +8,7 @@ local util = require("meatcode.util")
 
 local M = {}
 
-local state = { picker = nil, prompt_buf = nil, subscribed = false, from_home = false, hover_group = nil }
+local state = { picker = nil, prompt_buf = nil, subscribed = false, from_home = false }
 
 local function streak_text()
   local provider = providers.get("leetcode")
@@ -120,46 +120,38 @@ local function refresh()
   state.picker:refresh(entries(modules), { reset_prompt = false })
 end
 
---- Probe an unchecked entry's language support in the background; hide it
---- from the list the moment the probe confirms the configured language is
---- unsupported everywhere. Already-checked entries are a cache hit and
---- return instantly, so this is cheap to call on every hover.
+--- Probe an unchecked entry's language support in the background, notifying
+--- while the probe is in flight and hiding the entry the moment it confirms
+--- the configured language is unsupported everywhere. Already-checked
+--- entries are a cache hit inside `availability.check` and return instantly,
+--- so this is cheap to call on every hover.
 local function probe(problem)
   if availability.known(problem) then return end
+  util.notify("Checking " .. problem.name .. "'s language support…")
   availability.check(problem, function(languages)
     vim.schedule(function()
-      if not vim.tbl_contains(languages or {}, config.options.lang) then
-        refresh()
-      end
+      if not vim.tbl_contains(languages or {}, config.options.lang) then refresh() end
     end)
   end)
 end
 
-local function stop_hover_watch()
-  if state.hover_group then
-    pcall(vim.api.nvim_del_augroup_by_id, state.hover_group)
-    state.hover_group = nil
-  end
-end
-
---- Probe whatever entry is under the cursor as the user moves through the
---- list, debounced so holding j/k doesn't fire a probe per line crossed.
-local function watch_hover()
-  stop_hover_watch()
-  local bufnr = state.picker and state.picker.results_bufnr
-  if not bufnr then return end
-  state.hover_group = vim.api.nvim_create_augroup("MeatCodeListHover", { clear = true })
-  local generation = 0
+--- Probe whatever entry is selected as the user moves through the list.
+--- Telescope clears every action's pre/post hooks at the start of each new
+--- picker, so this only ever runs for the currently open list.
+local function watch_hover(actions)
   local function on_move()
-    generation = generation + 1
-    local gen = generation
-    vim.defer_fn(function()
-      if gen ~= generation or not picker_open() or not state.picker then return end
+    vim.schedule(function()
+      if not picker_open() or not state.picker then return end
       local ok, entry = pcall(function() return state.picker:get_selection() end)
       if ok and entry and entry.value then probe(entry.value) end
-    end, 150)
+    end)
   end
-  vim.api.nvim_create_autocmd("CursorMoved", { group = state.hover_group, buffer = bufnr, callback = on_move })
+  for _, name in ipairs({
+    "move_selection_next", "move_selection_previous",
+    "move_selection_worse", "move_selection_better",
+  }) do
+    actions[name]:enhance({ post = on_move })
+  end
   on_move()
 end
 
@@ -183,7 +175,6 @@ local function open_picker(query)
     attach_mappings = function(prompt_buf, map)
       state.prompt_buf = prompt_buf
       local function close()
-        stop_hover_watch()
         actions.close(prompt_buf)
         state.prompt_buf, state.picker = nil, nil
       end
@@ -192,29 +183,27 @@ local function open_picker(query)
         -- Leave the page stack alone so closing the problem can reveal it.
         require("meatcode.ui.problem").open(problem)
       end
+      local function unsupported(problem)
+        util.err(problem.name .. " doesn't support " .. lang_info.name(config.options.lang))
+        refresh()
+      end
       actions.select_default:replace(function()
         local selected = action_state.get_selected_entry()
         if not selected then return end
         local problem = selected.value
         local known = availability.known(problem)
         if known then
-          if vim.tbl_contains(known, config.options.lang) then
-            open_selected(problem)
-          else
-            util.err(problem.name .. " doesn't support " .. lang_info.name(config.options.lang))
-            refresh()
-          end
+          if vim.tbl_contains(known, config.options.lang) then open_selected(problem) else unsupported(problem) end
           return
         end
         util.notify("Checking " .. problem.name .. "'s language support…")
         availability.check(problem, function(languages)
           vim.schedule(function()
-            if languages and #languages > 0 and not vim.tbl_contains(languages, config.options.lang) then
-              util.err(problem.name .. " doesn't support " .. lang_info.name(config.options.lang))
-              refresh()
-              return
+            if vim.tbl_contains(languages or {}, config.options.lang) then
+              open_selected(problem)
+            else
+              unsupported(problem)
             end
-            open_selected(problem)
           end)
         end)
       end)
@@ -228,12 +217,13 @@ local function open_picker(query)
       map("i", "<Esc>", close)
       map("n", "q", close)
       map("n", "<Esc>", close)
+      watch_hover(actions)
       return true
     end,
   })
   state.picker:find()
-  watch_hover()
 end
+
 
 function M.open(query)
   require("meatcode.catalog").load()
