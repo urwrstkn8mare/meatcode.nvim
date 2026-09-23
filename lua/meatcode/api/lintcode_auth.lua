@@ -194,7 +194,8 @@ local function profile(creds, cb)
   }, function(err, res)
     if err then return cb(err, nil) end
     local ok, decoded = pcall(vim.json.decode, res.body or "")
-    local user = ok and decoded and decoded.data and decoded.data.user_info
+    local data = ok and type(decoded) == "table" and decoded.data
+    local user = type(data) == "table" and data.user_info
     if res.status < 200 or res.status >= 300 then
       return cb("LintCode returned HTTP " .. tostring(res.status), nil)
     end

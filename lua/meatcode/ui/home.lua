@@ -41,7 +41,7 @@ local CODE = {
 
 local HINT_NS = vim.api.nvim_create_namespace("meatcode-home-hint")
 
-local state = { buf = nil, rows = {}, hints = {}, subscribed = false }
+local state = { buf = nil, rows = {}, hints = {}, subscribed = false, auth = {} }
 
 local function is_open()
   return state.buf and vim.api.nvim_buf_is_valid(state.buf) and pages.buf() == state.buf
@@ -170,13 +170,26 @@ local function render()
   for _, backend in ipairs(providers.all()) do
     local logged_in = backend.auth.is_logged_in()
     local name = backend.name
+    local auth = state.auth[name]
+    local value, group
+    if not logged_in then
+      value, group = "logged out", "MeatCodeMuted"
+    elseif auth == "checking" then
+      value, group = "checking…", "MeatCodeMuted"
+    elseif type(auth) == "table" and auth.err then
+      value, group = "could not verify", "MeatCodeMuted"
+    else
+      value, group = "logged in", "MeatCodeDone"
+    end
+    local hint = logged_in and ("<CR> log out of " .. backend.label)
+      or ("<CR> log in to " .. backend.label)
+    if type(auth) == "table" and auth.err then hint = auth.err .. " · " .. hint end
     row({
       label = backend.label,
-      value = logged_in and "logged in" or "logged out",
-      group = logged_in and "MeatCodeDone" or "MeatCodeMuted",
+      value = value,
+      group = group,
       fn = function() M.toggle_login(name) end,
-      hint = logged_in and ("<CR> log out of " .. backend.label)
-        or ("<CR> log in to " .. backend.label),
+      hint = hint,
       command = ":MeatCode " .. (logged_in and "logout " or "login ") .. name,
     })
   end
@@ -239,6 +252,26 @@ local function render()
   state.default_hint = default_hint
   state.width = width
   M.update_hint()
+end
+
+--- Verify each saved credential whenever the homepage opens. This runs in the
+--- background and leaves an indeterminate network failure visibly distinct from
+--- a confirmed logged-out state.
+local function refresh_auth_status()
+  for _, backend in ipairs(providers.all()) do
+    local name = backend.name
+    if not backend.auth.is_logged_in() then
+      state.auth[name] = nil
+    elseif state.auth[name] ~= "checking" then
+      state.auth[name] = "checking"
+      backend.auth.refresh(function(err)
+        state.auth[name] = err and { err = err } or "verified"
+        vim.schedule(function()
+          if is_open() then render() end
+        end)
+      end)
+    end
+  end
 end
 
 --- Rewrite the bottom hint line to match the row under the cursor, so status
@@ -324,6 +357,7 @@ function M.open()
     buffer = state.buf,
     callback = function() pcall(M.update_hint) end,
   })
+  refresh_auth_status()
   render()
   if not state.subscribed then
     state.subscribed = true

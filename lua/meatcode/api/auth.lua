@@ -84,14 +84,15 @@ end
 
 --- Return a valid Firebase ID token, refreshing it if needed.
 ---@param cb fun(err: string|nil, token: string|nil)
-function M.id_token(cb)
+---@param force? boolean Refresh even while the cached ID token remains valid.
+function M.id_token(cb, force)
   load()
 
   if not state.refresh_token then
     return cb("not logged in — run :MeatCode login", nil)
   end
 
-  if state.id_token and os.time() < state.expires_at - EXPIRY_SKEW then
+  if not force and state.id_token and os.time() < state.expires_at - EXPIRY_SKEW then
     return cb(nil, state.id_token)
   end
 
@@ -145,6 +146,13 @@ function M.id_token(cb)
     finish(nil, state.id_token)
   end)
 end
+
+--- Verify the saved Firebase refresh token can still mint an ID token.
+---@param cb fun(err: string|nil, token: string|nil)
+function M.refresh(cb)
+  return M.id_token(cb or function() end, true)
+end
+
 
 --- Run an authenticated callable, acquiring a token first.
 function M.with_token(fn)
