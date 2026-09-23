@@ -86,18 +86,20 @@ function M.is_checking(problem)
 end
 
 --- Probe every content-chain candidate for `problem` and persist the merged
---- language set. `cb(languages, locked)` receives the merged set (possibly
---- empty when every candidate genuinely reports no languages) and whether
---- every candidate turned out to be a permanent access wall for this user.
---- A candidate that errors, or never resolves an id at all, leaves the whole
---- probe uncached so a later attempt retries instead of guessing; only a
---- definitive "no candidates" or "every reachable candidate is paywalled and
---- unlockable-by-nobody-here" verdict gets persisted.
+--- language set. `cb(languages, locked, err)` receives the merged set
+--- (possibly empty when every candidate genuinely reports no languages) and
+--- whether every candidate turned out to be a permanent access wall for this
+--- user. `err` is nil on any determined outcome (success or locked) and a
+--- concrete message when the probe genuinely could not find out -- a
+--- candidate erroring, or nothing ever resolving an id at all -- so a caller
+--- never has to guess why nothing happened; that state still leaves the
+--- probe uncached so a later attempt can succeed once whatever failed
+--- recovers.
 function M.check(problem, cb)
   local key = providers.problem_key(problem)
-  if not key then return cb(nil) end
+  if not key then return cb(nil, false, "problem has no stable identity") end
   local cached = load()[key]
-  if cached then return cb(cached.languages, cached.locked == true) end
+  if cached then return cb(cached.languages, cached.locked == true, nil) end
 
   if state.pending[key] then
     table.insert(state.pending[key], cb)
@@ -105,17 +107,17 @@ function M.check(problem, cb)
   end
   state.pending[key] = { cb }
 
-  local function finish(languages, locked)
+  local function finish(languages, locked, err)
     local waiters = state.pending[key]
     state.pending[key] = nil
-    for _, waiter in ipairs(waiters) do waiter(languages, locked) end
+    for _, waiter in ipairs(waiters) do waiter(languages, locked, err) end
   end
 
   local candidates = providers.candidates(problem, "content")
   if #candidates == 0 then
     load()[key] = { languages = {}, locked = true, checked_at = os.time() }
     persist()
-    return finish({}, true)
+    return finish({}, true, nil)
   end
 
   local seen, languages, any_success = {}, {}, false
@@ -132,6 +134,7 @@ function M.check(problem, cb)
   -- ever actually resolved an id (e.g. every candidate failed to cross-map),
   -- which says nothing about paywalls at all.
   local attempted, all_walled = false, true
+  local errors = {}
   local i = 0
   local function step()
     i = i + 1
@@ -140,23 +143,30 @@ function M.check(problem, cb)
       if any_success then
         load()[key] = { languages = languages, checked_at = os.time() }
         persist()
-        return finish(languages, false)
+        return finish(languages, false, nil)
       end
       local locked = attempted and all_walled
       if locked then
         load()[key] = { languages = {}, locked = true, checked_at = os.time() }
         persist()
+        return finish({}, true, nil)
       end
-      return finish(languages, locked)
+      local err = #errors > 0 and table.concat(errors, "; ")
+        or "no provider could resolve this problem"
+      return finish(languages, false, err)
     end
-    providers.ensure_id(problem, name, function(_, id)
-      if not id then return step() end
+    providers.ensure_id(problem, name, function(id_err, id)
+      if not id then
+        if id_err then table.insert(errors, name .. ": " .. id_err) end
+        return step()
+      end
       attempted = true
       providers.get(name).fetch(problem, config.options.lang, function(err, meta)
         if err or not meta then
           -- A network/fetch error says nothing about access -- do not let it
-          -- count as a paywall.
+          -- count as a paywall, but do surface it if nothing else succeeds.
           all_walled = false
+          table.insert(errors, name .. ": " .. tostring(err or "no metadata"))
         else
           local available = meta.availableLanguages
           local walled = meta.paid_only and not providers.paid_unlocked(name)

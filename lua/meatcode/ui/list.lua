@@ -164,19 +164,39 @@ local function refresh()
   state.picker:refresh(entries(modules), { reset_prompt = false })
 end
 
---- Probe an unchecked entry's availability in the background, notifying
---- while the probe is in flight and hiding the entry the moment it confirms
---- the configured language is unsupported everywhere, or that the problem is
---- inaccessible on every provider. Already-checked entries are a cache hit
---- inside `availability.check` and return instantly, so this is cheap to
---- call on every hover; a check already in flight for the same problem is
---- skipped instead of renotifying "Checking…" again.
+--- Human verdict for `problem`'s already-checked availability -- used to
+--- finish a "Checking…" progress handle with the actual outcome so it never
+--- reads as stuck, whichever of `probe`/`select_current` triggered it.
+local function verdict_message(problem)
+  if availability.is_locked(problem) then
+    return problem.name .. " isn't accessible on any provider you have unlocked"
+  elseif availability.is_unsupported(problem, config.options.lang) then
+    return problem.name .. " doesn't support " .. lang_info.name(config.options.lang)
+  end
+  return problem.name .. " supports " .. lang_info.name(config.options.lang)
+end
+
+--- Probe an unchecked entry's availability in the background, hiding the
+--- entry the moment it confirms the configured language is unsupported
+--- everywhere, or that the problem is inaccessible on every provider.
+--- Already-checked entries are a cache hit inside `availability.check` and
+--- return instantly, so this is cheap to call on every hover; a check
+--- already in flight for the same problem is skipped instead of spinning up
+--- a second one. The progress handle always resolves -- to the verdict on
+--- success, to a visible error when the probe genuinely failed -- so this
+--- never leaves a "Checking…" toast as the last thing you see for a row.
 local function probe(problem)
   if availability.known(problem) or availability.is_checking(problem) then return end
-  util.notify("Checking " .. problem.name .. "'s language support…")
-  availability.check(problem, function(languages, locked)
+  local handle = util.progress("Checking " .. problem.name .. "'s language support…")
+  availability.check(problem, function(_, _, err)
     vim.schedule(function()
-      if locked or not vim.tbl_contains(languages or {}, config.options.lang) then refresh() end
+      if err then
+        handle:cancel()
+        util.err(problem.name .. ": couldn't check language support — " .. err)
+        return
+      end
+      handle:finish(verdict_message(problem))
+      refresh()
     end)
   end)
 end
@@ -299,11 +319,17 @@ local function open_picker(query)
           decide(problem)
           return
         end
-        if not availability.is_checking(problem) then
-          util.notify("Checking " .. problem.name .. "'s language support…")
-        end
-        availability.check(problem, function()
-          vim.schedule(function() decide(problem) end)
+        local handle = util.progress("Checking " .. problem.name .. "'s language support…")
+        availability.check(problem, function(_, _, err)
+          vim.schedule(function()
+            if err then
+              handle:cancel()
+              util.err(problem.name .. ": couldn't check language support — " .. err)
+              return
+            end
+            handle:finish(verdict_message(problem))
+            decide(problem)
+          end)
         end)
       end
       actions.select_default:replace(select_current)
