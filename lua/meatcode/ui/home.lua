@@ -1,3 +1,4 @@
+local availability = require("meatcode.catalog.availability")
 local catalog = require("meatcode.catalog")
 local config = require("meatcode.config")
 local hl = require("meatcode.ui.highlight")
@@ -181,10 +182,13 @@ local function render()
   end
   row({ label = "language", value = lang_info.name(config.options.lang), command = ":MeatCode lang" })
   local mix = provider_mix(all)
+  local unsupported, locked = availability.hidden_counts(all and all.problems or {}, config.options.lang)
+  local hidden = unsupported + locked
   row({
     label = "catalog",
-    value = string.format("%d problems%s", all and #all.problems or 0,
-      mix ~= "" and ("  ·  " .. mix) or ""),
+    value = string.format("%d problems%s%s", all and #all.problems or 0,
+      mix ~= "" and ("  ·  " .. mix) or "",
+      hidden > 0 and string.format("  ·  %d hidden (%d unsupported, %d locked)", hidden, unsupported, locked) or ""),
   })
   row({ label = "streak", value = streak_text() })
   row({ label = "solved", value = string.format("%d problems", progress.solved_total()) })

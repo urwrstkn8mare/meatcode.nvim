@@ -63,7 +63,9 @@ local function entries(modules)
   local lang = config.options.lang
   local problems = {}
   for _, problem in ipairs(cat and cat.problems or {}) do
-    if not availability.is_unsupported(problem, lang) then table.insert(problems, problem) end
+    if not availability.is_unsupported(problem, lang) and not availability.is_locked(problem) then
+      table.insert(problems, problem)
+    end
   end
   local displayer = modules["telescope.pickers.entry_display"].create({
     separator = " ",
@@ -123,10 +125,15 @@ end
 
 local function title()
   local cat = catalog.get()
-  return string.format(" Problems · %d merged · LC %d · NC %d · LI %d · %s ",
-    cat and #cat.problems or 0,
+  local problems = cat and cat.problems or {}
+  local unsupported, locked = availability.hidden_counts(problems, config.options.lang)
+  local hidden = unsupported + locked
+  return string.format(" Problems · %d merged · LC %d · NC %d · LI %d%s · %s ",
+    #problems,
     catalog.provider_count("leetcode"), catalog.provider_count("neetcode"),
-    catalog.provider_count("lintcode"), streak_text())
+    catalog.provider_count("lintcode"),
+    hidden > 0 and string.format(" · %d hidden (%d unsupported, %d locked)", hidden, unsupported, locked) or "",
+    streak_text())
 end
 
 local function refresh()
@@ -141,18 +148,19 @@ local function refresh()
   state.picker:refresh(entries(modules), { reset_prompt = false })
 end
 
---- Probe an unchecked entry's language support in the background, notifying
+--- Probe an unchecked entry's availability in the background, notifying
 --- while the probe is in flight and hiding the entry the moment it confirms
---- the configured language is unsupported everywhere. Already-checked
---- entries are a cache hit inside `availability.check` and return instantly,
---- so this is cheap to call on every hover; a check already in flight for
---- the same problem is skipped instead of renotifying "Checking…" again.
+--- the configured language is unsupported everywhere, or that the problem is
+--- inaccessible on every provider. Already-checked entries are a cache hit
+--- inside `availability.check` and return instantly, so this is cheap to
+--- call on every hover; a check already in flight for the same problem is
+--- skipped instead of renotifying "Checking…" again.
 local function probe(problem)
   if availability.known(problem) or availability.is_checking(problem) then return end
   util.notify("Checking " .. problem.name .. "'s language support…")
-  availability.check(problem, function(languages)
+  availability.check(problem, function(languages, locked)
     vim.schedule(function()
-      if not vim.tbl_contains(languages or {}, config.options.lang) then refresh() end
+      if locked or not vim.tbl_contains(languages or {}, config.options.lang) then refresh() end
     end)
   end)
 end
@@ -233,15 +241,21 @@ local function open_picker(query)
         util.err(problem.name .. " doesn't support " .. lang_info.name(config.options.lang))
         refresh()
       end
-      --- Decide open-vs-unsupported from the persisted cache rather than a
-      --- raw `check` result: a probe that could not determine anything (every
-      --- content candidate locked or erroring) leaves the cache unset rather
-      --- than blacklisting the problem, and `is_unsupported` already treats
-      --- "unset" as "not confirmed unsupported" -- matching `entries()`'s own
-      --- filter and avoiding a false "doesn't support X" report on a probe
-      --- that never actually found out.
+      local function locked_out(problem)
+        util.err(problem.name .. " isn't accessible on any provider you have unlocked")
+        refresh()
+      end
+      --- Decide open-vs-hidden from the persisted cache rather than a raw
+      --- `check` result: a probe that could not determine anything (every
+      --- content candidate erroring, or none ever resolving an id) leaves
+      --- the cache unset rather than blacklisting the problem, and
+      --- `is_unsupported`/`is_locked` already treat "unset" as "not
+      --- confirmed" -- matching `entries()`'s own filter and avoiding a
+      --- false report on a probe that never actually found out.
       local function decide(problem)
-        if availability.is_unsupported(problem, config.options.lang) then
+        if availability.is_locked(problem) then
+          locked_out(problem)
+        elseif availability.is_unsupported(problem, config.options.lang) then
           unsupported(problem)
         else
           open_selected(problem)
