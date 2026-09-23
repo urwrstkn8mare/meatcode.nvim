@@ -31,7 +31,7 @@ local function decode(name, cb)
     end
     if res.status < 200 or res.status >= 300 or body.success == false then
       return cb(string.format("%s: %s", name,
-        tostring(body.detail ~= "" and body.detail or body.message or ("HTTP " .. res.status))), nil)
+        tostring(body.detail ~= "" and body.detail or body.message or ("HTTP " .. res.status))), nil, body.code)
     end
     local data = body.data
     if data == vim.NIL then data = nil end
@@ -92,8 +92,32 @@ function M.problem(problem_id, lang, cb)
   local id = tostring(problem_id)
   request("problem", {
     url = string.format("%s/v2/api/problems/%s/?lang=2", API, id),
-  }, function(err, data)
-    if err then return cb(err, nil) end
+  }, function(err, data, code)
+    if err then
+      -- LintCode answers a locked problem with a hard `success: false, code:
+      -- 1001` error instead of a successful paid_only response the way
+      -- LeetCode's GraphQL does for premium content -- normalize it the same
+      -- way so a probe recognizes this as a genuine access wall rather than
+      -- a transient failure worth retrying.
+      if code == 1001 then
+        return cb(nil, {
+          provider = "lintcode",
+          schema = util.META_SCHEMA,
+          question_id = id,
+          paid_only = true,
+          description = "",
+          starterCode = {},
+          availableLanguages = {},
+          custom_test_cases = {},
+          expected_outputs = {},
+          test_case_type = "function",
+          test_case_count = 0,
+          topics = {},
+          companies = {},
+        })
+      end
+      return cb(err, nil)
+    end
     if type(data) ~= "table" then return cb("unknown LintCode problem: " .. id, nil) end
 
     local available, seen = {}, {}

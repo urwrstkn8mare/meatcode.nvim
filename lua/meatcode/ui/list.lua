@@ -16,6 +16,16 @@ local M = {}
 --- for bookkeeping and gets relaunched via `on_show`.
 local state = { picker = nil, prompt_buf = nil, page_buf = nil, query = nil, subscribed = false }
 
+--- Entry tables keyed by `providers.problem_key`, reused (mutated in place,
+--- never replaced) across every `entries()` call so a problem's row stays
+--- the *same* Lua table across refreshes. Telescope's `follow` selection
+--- strategy matches the held selection by table identity (`==`), not by
+--- value -- a fresh table per refresh (the previous behaviour) meant it
+--- could never find the previously-selected row again, so every background
+--- refresh (an availability probe completing, progress syncing, etc.) reset
+--- the cursor to the top of the list.
+local entry_cache = {}
+
 local function streak_text()
   local provider = providers.get("leetcode")
   if not provider.auth.is_logged_in() then return "log in for streak" end
@@ -83,23 +93,29 @@ local function entries(modules)
         table.insert(ids, name .. " " .. tostring(record.id))
       end
       table.sort(ids)
-      return {
-        value = problem,
-        ordinal = table.concat({
-          number_text(problem), problem.name or "", problem.difficulty or "",
-          table.concat(ids, " "), table.concat(problem.topics or {}, " "),
-          table.concat(problem.companies or {}, " "),
-        }, " "),
-        display = function()
-          return displayer({
-            { tostring(count), count > 0 and "MeatCodeDone" or "MeatCodeTodo" },
-            number_text(problem),
-            count > 0 and { problem.name, "MeatCodeDone" } or problem.name,
-            { problem.difficulty, "MeatCode" .. problem.difficulty },
-            { provider_text(problem), "MeatCodeMuted" },
-          })
-        end,
-      }
+      local ordinal = table.concat({
+        number_text(problem), problem.name or "", problem.difficulty or "",
+        table.concat(ids, " "), table.concat(problem.topics or {}, " "),
+        table.concat(problem.companies or {}, " "),
+      }, " ")
+      local function display()
+        return displayer({
+          { tostring(count), count > 0 and "MeatCodeDone" or "MeatCodeTodo" },
+          number_text(problem),
+          count > 0 and { problem.name, "MeatCodeDone" } or problem.name,
+          { problem.difficulty, "MeatCode" .. problem.difficulty },
+          { provider_text(problem), "MeatCodeMuted" },
+        })
+      end
+      local key = providers.problem_key(problem)
+      local cached = key and entry_cache[key]
+      if cached then
+        cached.value, cached.ordinal, cached.display = problem, ordinal, display
+        return cached
+      end
+      local entry = { value = problem, ordinal = ordinal, display = display }
+      if key then entry_cache[key] = entry end
+      return entry
     end,
   })
 end
@@ -206,6 +222,11 @@ local function open_picker(query)
     default_text = vim.trim(query or ""),
     initial_mode = "insert",
     sorting_strategy = "ascending",
+    -- Keep whatever row is currently selected selected across refreshes
+    -- (default "reset" jumps to the top on every re-sort) -- paired with
+    -- entry_cache above so a background availability probe completing
+    -- doesn't yank the cursor out from under you while you're browsing.
+    selection_strategy = "follow",
     layout_strategy = "vertical",
     layout_config = { width = 9999, height = 9999, prompt_position = "top" },
     -- A completion callback runs after every async find/filter pass,
