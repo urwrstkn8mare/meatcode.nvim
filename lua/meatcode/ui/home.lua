@@ -339,14 +339,19 @@ local function keymaps()
 end
 
 function M.open()
-  if is_open() then return end
+  if is_open() then
+    pages.focus()
+    return
+  end
   catalog.load()
   problem_catalog.load()
   progress.load()
 
-  state.buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[state.buf].bufhidden = "hide"
-  vim.bo[state.buf].filetype = "meatcode-home"
+  if not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
+    state.buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[state.buf].bufhidden = "hide"
+    vim.bo[state.buf].filetype = "meatcode-home"
+  end
   pages.push({ id = "home", buf = state.buf, title = "home" })
 
   vim.wo[vim.api.nvim_get_current_win()].cursorline = true

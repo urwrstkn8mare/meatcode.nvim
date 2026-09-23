@@ -360,6 +360,7 @@ function M.open(query)
   catalog.load()
   catalog.refresh_mappings()
   progress.load()
+  pages.focus()
 
   if picker_open() then
     local win = vim.fn.bufwinid(state.prompt_buf)

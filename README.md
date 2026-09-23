@@ -91,9 +91,15 @@ wants](doc/authentication.md).
 | `:MeatCode lang [name]` | Show or change the solution language |
 | `:MeatCode login`/`logout [provider]` | See above |
 
+The homepage, roadmap and finder share one tab: opening any of them jumps
+back to it and switches what it shows there instead of piling up tabs, and
+`q`/`<Esc>` steps back through whatever you navigated through to get there.
+
 Everything you do *to* a problem is a buffer-local mapping, not another Ex
 command. A problem opens in its own tab: statement left, solution right,
-results underneath.
+results underneath. Only one problem is open at a time — opening another one
+(from the finder, the roadmap, `random`, `daily`, …) closes the current one
+first, saving its code, the same as `q` would.
 
 | Key | Action |
 | --- | --- |

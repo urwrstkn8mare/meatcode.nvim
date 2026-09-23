@@ -291,15 +291,20 @@ local function keymaps()
 end
 
 function M.open()
-  if is_open() then return end
+  if is_open() then
+    pages.focus()
+    return
+  end
 
   catalog.load()
   progress.load()
   state.selected = state.selected or "Arrays & Hashing"
 
-  state.buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[state.buf].bufhidden = "hide"
-  vim.bo[state.buf].filetype = "meatcode-roadmap"
+  if not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then
+    state.buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[state.buf].bufhidden = "hide"
+    vim.bo[state.buf].filetype = "meatcode-roadmap"
+  end
   pages.push({ id = "roadmap", buf = state.buf, title = "roadmap", on_show = render })
 
   vim.wo[0].wrap = false

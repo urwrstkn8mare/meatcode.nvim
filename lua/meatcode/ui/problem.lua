@@ -66,6 +66,20 @@ local function focus_session(s)
   return true
 end
 
+--- Whether `tab` (current tab when omitted) is hosting a live problem
+--- session. `pages.lua` uses this to tell a problem tab -- which needs a
+--- fresh tab for a page instead of a page hijacking one of its panes --
+--- from an ordinary editing tab, which a page can still take over in place.
+function M.is_session_tab(tab)
+  tab = tab or vim.api.nvim_get_current_tabpage()
+  for _, s in pairs(sessions) do
+    if s.tab == tab then
+      return true
+    end
+  end
+  return false
+end
+
 local function session_key(problem)
   return providers.problem_key(problem)
 end
@@ -809,16 +823,26 @@ local function restore_after_close(tab)
   tabs.clear(vim.api.nvim_get_current_tabpage())
 end
 
-function M.close(s)
-  s = s or current_session()
-  if not s or s.closing then
-    return
-  end
+--- Save, drop images, and remove a session's own bookkeeping -- the part of
+--- closing that always applies. Shared by M.close() (which then decides what
+--- to reveal in its tab) and close_other_sessions() (which does not reveal
+--- anything -- the new problem's own tab is about to take over the screen).
+---@return integer|nil tab the session's own tab, for the caller to close
+local function teardown(s)
   s.closing = true
   pcall(clear_images, s)
   pcall(save, s)
   local tab = s.tab
   drop_session(s)
+  return tab
+end
+
+function M.close(s)
+  s = s or current_session()
+  if not s or s.closing then
+    return
+  end
+  local tab = teardown(s)
   if tab and vim.api.nvim_tabpage_is_valid(tab) then
     if #vim.api.nvim_list_tabpages() > 1 then
       pcall(vim.cmd, vim.api.nvim_tabpage_get_number(tab) .. "tabclose")
@@ -832,6 +856,22 @@ function M.close(s)
     end
   elseif pages.depth() > 0 then
     restore_after_close(nil)
+  end
+end
+
+--- Only one problem tab exists at a time: opening a different problem closes
+--- every other open one first, exactly like `q` does (save, drop images,
+--- drop session, close its tab) minus `q`'s "reveal whatever is underneath"
+--- step -- called right after the new problem's own tab has taken over the
+--- screen, so there is always another tab left to close the old one from.
+local function close_other_sessions(except_key)
+  for key, s in pairs(sessions) do
+    if key ~= except_key and not s.closing then
+      local tab = teardown(s)
+      if tab and vim.api.nvim_tabpage_is_valid(tab) and #vim.api.nvim_list_tabpages() > 1 then
+        pcall(vim.cmd, vim.api.nvim_tabpage_get_number(tab) .. "tabclose")
+      end
+    end
   end
 end
 
@@ -1508,6 +1548,7 @@ function M.open(problem, opts)
           end
           if opts.will_show then opts.will_show() end
           build_windows(s)
+          close_other_sessions(key)
           opening[key] = nil
           render_description(s)
           keymaps(s)

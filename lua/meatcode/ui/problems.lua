@@ -136,6 +136,7 @@ function M.open(pattern, list)
   state.list = list or config.options.list
 
   if is_open() then
+    pages.focus()
     render()
     return
   end

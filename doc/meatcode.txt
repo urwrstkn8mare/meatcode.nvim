@@ -77,6 +77,12 @@ of the homepage to log that provider in or out.
 :MeatCode login NAME    Log in to `leetcode`, `neetcode`, or `lintcode`.
 :MeatCode logout NAME   Remove credentials for one provider.
 
+The homepage, roadmap and finder share one tab: running any of the commands
+above jumps back to it and switches what it shows there, rather than opening
+another tab each time. Opening a different problem closes the open one first
+(saving its code, same as `q`); reopening the open one just focuses it. At
+most one problem tab exists at a time.
+
 Problem actions use the buffer-local mappings below instead of duplicate Ex
 commands. Accepted cloud submissions are counted in the selected language; an
 accept on any provider counts once per calendar day, regardless of how many
