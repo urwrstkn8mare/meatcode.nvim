@@ -57,16 +57,16 @@ local function classify(token, creds)
   end
 end
 
---- Accept the login script's output, a pasted header block, a single
---- `Name: value` line, a bare JWT, or a bare cookie string.
+--- Accept the login script's combined `Bearer … Cookie: …` line, a pasted
+--- header block, a bare JWT, or a bare cookie string.
 local function parse(input)
   if type(input) ~= "string" or vim.trim(input) == "" then return nil, BAD_INPUT end
   local creds = {}
   for _, raw in ipairs(vim.split(input, "\n", { plain = true })) do
     local line = vim.trim(raw)
-    local name, value = line:match("^([%a%-]+)%s*:%s*(.+)$")
-    if name and value and name:lower() == "cookie" then
-      creds.cookie = vim.trim(value)
+    local cookie = line:match("[Cc][Oo][Oo][Kk][Ii][Ee]%s*:%s*(.+)$")
+    if cookie then
+      creds.cookie = vim.trim(cookie)
     elseif line:find("=", 1, true) and not line:find("eyJ", 1, true) then
       creds.cookie = creds.cookie and (creds.cookie .. "; " .. line) or line
     end

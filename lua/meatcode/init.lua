@@ -42,8 +42,8 @@ local TOKEN_SNIPPET = [[
 --- inspected rather than trusting one key name, and `token_type` in the
 --- payload decides which one is the refresh token. The submission judge
 --- (`/new/api/...`) has been seen rejecting a bearer-only login even when the
---- token is fresh and unexpired, so `document.cookie` is printed alongside it
---- -- `lintcode_auth.parse` picks up both from one paste.
+--- token is fresh and unexpired, so `document.cookie` is emitted on that same
+--- copyable line; `lintcode_auth.parse` picks up both from one paste.
 local LINTCODE_SNIPPET = [[
 (() => {
   const re = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
@@ -61,8 +61,8 @@ local LINTCODE_SNIPPET = [[
   const now = Date.now() / 1000;
   const fresh = [...found].filter(t => (claims(t).exp || 0) > now);
   const t = fresh.find(t => claims(t).token_type === 'refresh') || fresh[0];
-  console.log(t ? 'Bearer ' + t : 'NOT FOUND - sign in on this tab, reload, and rerun');
-  if (document.cookie) console.log('Cookie: ' + document.cookie);
+  const cookie = document.cookie;
+  console.log(t ? 'Bearer ' + t + (cookie ? ' Cookie: ' + cookie : '') : 'NOT FOUND - sign in on this tab, reload, and rerun');
 })()
 
 ]]
@@ -126,8 +126,8 @@ function M.login(provider, credential)
         "Open https://www.lintcode.com and sign in.",
         "Open the browser console (DevTools > Console).",
         "Press y here to copy the script below, then run it in that console.",
-        "Copy both lines it prints: `Bearer eyJ...` and `Cookie: ...`.",
-        "Return here and press p to paste them both.",
+        "Copy the one `Bearer eyJ... Cookie: ...` line it prints.",
+        "Return here and press p to paste it.",
       },
       alternative = {
         "By hand instead: DevTools > Application > Local Storage and copy the",
@@ -135,8 +135,8 @@ function M.login(provider, credential)
         "request also works, but that access token expires in minutes.",
         "Submissions failing with \"no permission to access\" despite a fresh",
         "login want the Cookie too: DevTools > Network > a request to",
-        "apiv1.lintcode.com > Request Headers > Cookie, pasted on its own",
-        "line as `Cookie: ...` alongside the token.",
+        "apiv1.lintcode.com > Request Headers > Cookie, appended as",
+        "` Cookie: ...` to the pasted bearer token.",
       },
       prompt = "LintCode token: ",
       snippet = LINTCODE_SNIPPET,
