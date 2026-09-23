@@ -677,6 +677,57 @@ local function is_float(win)
   return ok and cfg.relative ~= nil and cfg.relative ~= ""
 end
 
+--- The single augroup every problem session's autocmds live in. Callable
+--- before `ensure_watchers` has run (it creates the group on first use), so
+--- per-buffer watchers can be registered the moment a pane's buffer exists.
+local function watch_group()
+  return vim.api.nvim_create_augroup("MeatCodeProblemLifecycle", { clear = false })
+end
+
+--- The buffer that belongs in `win` for a live session, or nil when `win`
+--- isn't one of its three layout panes.
+local function pane_buf(s, win)
+  if win == s.code_win then return s.code_buf end
+  if win == s.desc_win then return s.desc_buf end
+  if win == s.res_win then return s.res_buf end
+  return nil
+end
+
+--- Remember the cursor a pane's own buffer was left at, so a later jump away
+--- from it can be undone at the exact spot instead of wherever the jump
+--- happened to land.
+local function track_pane_cursor(s, buf)
+  vim.api.nvim_create_autocmd("BufLeave", {
+    group = watch_group(),
+    buffer = buf,
+    callback = function()
+      local ok, cursor = pcall(vim.api.nvim_win_get_cursor, 0)
+      if ok then
+        s.pane_cursor = s.pane_cursor or {}
+        s.pane_cursor[buf] = cursor
+      end
+    end,
+  })
+end
+
+--- A jump that would replace a layout pane's buffer in place -- LSP
+--- goto-definition/references, `gf`, a ctags jump, `:e`, a quickfix jump, …
+--- -- puts the pane back on its own buffer at its own cursor and opens the
+--- jump target in a brand new tab instead. The pane's window is part of the
+--- problem layout (see `WinClosed` below), so closing *it* tears the whole
+--- problem down; closing an ordinary tab you jumped into does not.
+local function open_elsewhere(s, win, own_buf, foreign_buf)
+  if not vim.api.nvim_win_is_valid(win) then return end
+  local ok_cursor, jump_cursor = pcall(vim.api.nvim_win_get_cursor, win)
+  vim.api.nvim_win_set_buf(win, own_buf)
+  local own_cursor = s.pane_cursor and s.pane_cursor[own_buf]
+  if own_cursor then pcall(vim.api.nvim_win_set_cursor, win, own_cursor) end
+  vim.cmd("tabnew")
+  local new_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(new_win, foreign_buf)
+  if ok_cursor then pcall(vim.api.nvim_win_set_cursor, new_win, jump_cursor) end
+end
+
 --- Collapse splits in the current tab and show the page underneath this problem
 --- (home / roadmap / topic list). Falls back to an empty buffer when nothing is
 --- on the stack — e.g. a problem opened with no MeatCode UI behind it.
@@ -778,6 +829,32 @@ local function ensure_watchers()
           end
         end)
       end
+    end,
+  })
+  -- A command that jumps to a different buffer inside a layout pane (LSP
+  -- goto-definition/references, `gf`, a ctags jump, a quickfix jump, …)
+  -- would otherwise replace that pane's buffer in the same window; quitting
+  -- the result then closes the pane itself and, via `WinClosed` above, tears
+  -- the whole problem down. Send the jump to a fresh tab instead.
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    group = group,
+    callback = function(ev)
+      local win = vim.api.nvim_get_current_win()
+      local s = session_by_win(win)
+      if not s or s.closing then return end
+      local own_buf = pane_buf(s, win)
+      if not own_buf or ev.buf == own_buf then return end
+      local foreign_buf = ev.buf
+      -- Deferred: a jump command sets the buffer and the cursor as two
+      -- separate calls (see e.g. `vim.lsp.util.jump_to_location`). Acting
+      -- synchronously here would capture the cursor mid-jump, before the
+      -- second call lands, and then the jump's own cursor-set call would
+      -- land on the restored own_buf instead of the buffer it moved away.
+      vim.schedule(function()
+        if not vim.api.nvim_win_is_valid(win) then return end
+        if vim.api.nvim_win_get_buf(win) ~= foreign_buf then return end
+        open_elsewhere(s, win, own_buf, foreign_buf)
+      end)
     end,
   })
   vim.api.nvim_create_autocmd("TabClosed", {
@@ -1198,6 +1275,7 @@ local function seed_file(s, path, cb)
 end
 
 local function build_windows(s)
+  ensure_watchers()
   vim.cmd("tabnew")
   s.tab = vim.api.nvim_get_current_tabpage()
   tabs.set(s.tab, s.problem.name)
@@ -1205,6 +1283,7 @@ local function build_windows(s)
 
   s.desc_win = vim.api.nvim_get_current_win()
   s.desc_buf = vim.api.nvim_get_current_buf()
+  track_pane_cursor(s, s.desc_buf)
   vim.bo[s.desc_buf].buftype = "nofile"
   vim.bo[s.desc_buf].bufhidden = "wipe"
   vim.bo[s.desc_buf].swapfile = false
@@ -1226,11 +1305,13 @@ local function build_windows(s)
   s.code_win = vim.api.nvim_get_current_win()
   s.code_buf = vim.api.nvim_get_current_buf()
   vim.bo[s.code_buf].filetype = lang_info.filetype(s.lang)
+  track_pane_cursor(s, s.code_buf)
 
   vim.cmd("belowright split")
   s.res_win = vim.api.nvim_get_current_win()
   s.res_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_win_set_buf(s.res_win, s.res_buf)
+  track_pane_cursor(s, s.res_buf)
   vim.bo[s.res_buf].filetype = "meatcode-results"
   vim.bo[s.res_buf].bufhidden = "wipe"
   vim.bo[s.res_buf].modifiable = false
@@ -1240,7 +1321,6 @@ local function build_windows(s)
   vim.wo[s.res_win].wrap = false
   relayout(s)
   vim.api.nvim_set_current_win(s.code_win)
-  ensure_watchers()
 end
 
 local function initial_candidates(problem, forced)
