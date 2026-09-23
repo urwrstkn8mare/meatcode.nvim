@@ -129,6 +129,7 @@ the roadmap for the full set).
 
 ## TODO
 
+- Windows Sandboxing support for local solution oracle
 - Sorting and filtering in the problem list view
 - More languages (i.e. Rust)
 - Notes per problem, kept beside the solution file
