@@ -55,8 +55,14 @@ The credential is validated once at login with:
 
 ```
 GET https://apiv1.lintcode.com/new/api/accounts/profile/
--> {"data": {"user_info": {...}}}
+-> {"data": {"user_info": {"profile": {"is_vip": true, "is_svip": false, ...}, ...}}}
 ```
+
+`user_info.profile.is_vip`/`is_svip` is what decides whether a VIP-locked
+problem (`is_locked: true` below, or the `1001` error) is actually reachable —
+being logged in is not enough on its own, since an ordinary account still gets
+the same wall as an anonymous request. Both flags land in `lintcode-auth.json`
+and are read back through `M.user()`.
 
 Credentials land in `stdpath("cache")/meatcode/lintcode-auth.json` with mode
 `0600`.
@@ -74,6 +80,12 @@ Returns the statement (`description`, `example`, `new_notice`/`notice`,
 Medium, 3 Hard), `is_locked`, `accept_languages`, `tags`, `company_tags`, and
 the visible `testcase_sample`. The plugin concatenates the statement blocks
 into Markdown and exposes topics/companies as plain names.
+
+A VIP-locked problem this account cannot open answers `{"success": false,
+"code": 1001, ...}` instead of `is_locked: true` on a normal envelope; the
+plugin maps that specific code onto the same `paid_only`-flagged shape a
+successful locked response would carry, rather than treating it as a
+transient failure worth retrying.
 
 ### Starter code
 

@@ -95,6 +95,27 @@ prefers IndexedDB. See `:MeatCode login` for the extraction snippet.
 }
 ```
 
+A locked problem (`free: false` in the list above) answers very differently —
+`queue` ("Design Double-ended Queue"), gated behind NeetCode Pro, returns just:
+
+```jsonc
+{
+  "id": "queue", "name": "Design Double-ended Queue", "difficulty": "Easy",
+  "tag": "Implement Data Structures", "free": false,
+  "description": "...",              // a short teaser, not the full statement
+  "message": "You must be a pro member to view this problem."
+  // no starterCode, solutions, availableLanguages, or test_case_type at all
+}
+```
+
+Sending the `Authorization` header from a signed-in session does not change
+this — NeetCode Pro is a paid tier separate from having an account, and this
+endpoint has no way to prove Pro status short-circuits the wall. The plugin
+therefore has no way to unlock Pro-only problems; `lua/meatcode/api/init.lua`
+sets `paid_only = true` off `free == false` so the availability probe
+(`lua/meatcode/catalog/availability.lua`) treats every NeetCode-only problem
+like this as permanently locked rather than as solvable in zero languages.
+
 **`solutions` is the key to local testing.** Expected outputs are never exposed,
 but the reference implementation is — so running it locally over the same inputs
 recovers the expected output. That is exactly what `lua/meatcode/runner` does.

@@ -20,7 +20,19 @@ local function authed(fn, cb)
 end
 
 --- Full problem payload: description, starter code and reference solutions for
---- every supported language, article body and video id. Works unauthenticated.
+--- every supported language, article body and video id. Works unauthenticated,
+--- but a Pro-locked problem answers with `free = false`, a `message` telling
+--- the user to upgrade, and no `starterCode`/`availableLanguages` at all --
+--- authenticating does not change this, since NeetCode Pro is a separate paid
+--- tier from having an account. `paid_only` marks that specific shape --
+--- `free == false` *and* no language list -- rather than `free == false` on
+--- its own, so it means "this response withheld the content" and not "this
+--- problem is tagged Pro": a subscriber whose own Pro-unlocked fetch comes
+--- back with a real `availableLanguages` must not be flagged paid-only just
+--- because the catalog still tags the problem `free: false`. This mirrors
+--- the field the LeetCode and LintCode adapters already set, so the
+--- availability probe recognizes a genuine wall rather than a problem with
+--- zero solvable languages.
 ---@param problem_id string NeetCode problem id, e.g. "two-integer-sum"
 ---@param cb fun(err: string|nil, meta: table|nil)
 function M.problem(problem_id, cb)
@@ -32,6 +44,8 @@ function M.problem(problem_id, cb)
       return cb("unknown problem: " .. problem_id, nil)
     end
     data.schema = util.META_SCHEMA
+    local available = data.availableLanguages
+    data.paid_only = data.free == false and (type(available) ~= "table" or #available == 0)
     cb(nil, data)
   end)
 end

@@ -109,8 +109,20 @@ function M.filename(problem)
   end
 end
 
---- Whether paid-only problems on `name` can be opened. Any login unlocks
---- NeetCode and LintCode, while LeetCode additionally needs Premium.
+--- Whether a paid-only problem on `name` is worth attempting to open for
+--- this user, and what a UI should credit it to ("needs Premium" vs "needs
+--- VIP"). This is not consulted by the availability probe (`catalog/
+--- availability.lua`), which already judges each fetch's own
+--- already-authenticated response instead of guessing from a subscription
+--- tier: LeetCode needs Premium (`userStatus.isPremium`) and LintCode needs
+--- VIP or SVIP (`accounts/profile`'s `is_vip`/`is_svip`), both captured at
+--- login and exposed via each backend's `auth.user()`. Being merely logged
+--- in unlocks neither -- verified by probing both with a logged-in,
+--- non-subscribed session and getting the same wall back. NeetCode exposes
+--- no subscription signal at all: an authenticated request against a
+--- Pro-locked problem still comes back with no
+--- `starterCode`/`availableLanguages`, so this plugin has no way to unlock
+--- NeetCode Pro content.
 function M.paid_unlocked(name)
   local backend = M.get(name)
   if not backend or not backend.auth.is_logged_in() then return false end
@@ -118,7 +130,12 @@ function M.paid_unlocked(name)
     local user = backend.auth.user()
     return type(user) == "table" and user.isPremium == true
   end
-  return true
+  if name == "lintcode" then
+    local user = backend.auth.user()
+    local profile = type(user) == "table" and user.profile
+    return type(profile) == "table" and (profile.is_vip == true or profile.is_svip == true)
+  end
+  return false
 end
 
 function M.ensure_id(problem, name, cb)
