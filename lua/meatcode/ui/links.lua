@@ -60,6 +60,19 @@ function M.open(problem)
       end
       map("i", "<CR>", open_selected)
       map("n", "<CR>", open_selected)
+      -- Entries are links, not files/buffers: telescope's default
+      -- split/vsplit/tab and delete-buffer actions assume file-backed
+      -- entries and either misbehave (open a bogus buffer named after our
+      -- display text) or crash outright on fields these entries don't set.
+      -- A global keymap as common as kickstart.nvim's `<C-d>`/`dd` ->
+      -- `actions.delete_buffer` would otherwise crash here too.
+      map("i", "<C-x>", open_selected)
+      map("n", "<C-x>", open_selected)
+      map("i", "<C-v>", open_selected)
+      map("n", "<C-v>", open_selected)
+      map("i", "<C-t>", open_selected)
+      map("n", "<C-t>", open_selected)
+      actions.delete_buffer:replace(function() end)
       return true
     end,
   }):find()

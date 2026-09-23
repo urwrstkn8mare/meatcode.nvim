@@ -221,7 +221,16 @@ local function open_picker(query)
         util.err(problem.name .. " doesn't support " .. lang_info.name(config.options.lang))
         refresh()
       end
-      actions.select_default:replace(function()
+      --- Entries here are LeetCode problems, not buffers or files, so
+      --- telescope's generic file/buffer actions must not run their default
+      --- implementations against them: they index fields (`bufnr`,
+      --- `filename`) these entries never set. A global keymap as common as
+      --- kickstart.nvim's `<C-d>`/`dd` -> `actions.delete_buffer` otherwise
+      --- crashes here with "Invalid 'name': Expected Lua string" (indexing
+      --- `vim.bo[nil]`), and `<C-x>`/`<C-v>`/`<C-t>` would error trying to
+      --- `vim.split()` our `display` closure. Route every "open" variant
+      --- through the same handler as `<CR>` and make delete a no-op.
+      local function select_current()
         local selected = action_state.get_selected_entry()
         if not selected then return end
         local problem = selected.value
@@ -240,7 +249,12 @@ local function open_picker(query)
             end
           end)
         end)
-      end)
+      end
+      actions.select_default:replace(select_current)
+      actions.select_horizontal:replace(select_current)
+      actions.select_vertical:replace(select_current)
+      actions.select_tab:replace(select_current)
+      actions.delete_buffer:replace(function() end)
       local function open_browser()
         local selected = action_state.get_selected_entry()
         if not selected then return end
