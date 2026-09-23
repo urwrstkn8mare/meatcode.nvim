@@ -145,9 +145,10 @@ end
 --- while the probe is in flight and hiding the entry the moment it confirms
 --- the configured language is unsupported everywhere. Already-checked
 --- entries are a cache hit inside `availability.check` and return instantly,
---- so this is cheap to call on every hover.
+--- so this is cheap to call on every hover; a check already in flight for
+--- the same problem is skipped instead of renotifying "Checking…" again.
 local function probe(problem)
-  if availability.known(problem) then return end
+  if availability.known(problem) or availability.is_checking(problem) then return end
   util.notify("Checking " .. problem.name .. "'s language support…")
   availability.check(problem, function(languages)
     vim.schedule(function()
@@ -156,24 +157,29 @@ local function probe(problem)
   end)
 end
 
---- Probe whatever entry is selected as the user moves through the list.
+--- Probe whatever entry is currently selected. Wired to `move_selection_*`
+--- (explicit up/down navigation) below, and to the picker's `on_complete`
+--- in `open_picker` -- typing in the prompt re-filters and silently changes
+--- the default selection without ever firing a `move_selection_*` action, so
+--- without the `on_complete` hook the first (and every re-filtered) match
+--- never gets probed until the user manually presses up/down.
+local function on_move()
+  vim.schedule(function()
+    if not picker_open() or not state.picker then return end
+    local ok, entry = pcall(function() return state.picker:get_selection() end)
+    if ok and entry and entry.value then probe(entry.value) end
+  end)
+end
+
 --- Telescope clears every action's pre/post hooks at the start of each new
 --- picker, so this only ever runs for the currently open list.
 local function watch_hover(actions)
-  local function on_move()
-    vim.schedule(function()
-      if not picker_open() or not state.picker then return end
-      local ok, entry = pcall(function() return state.picker:get_selection() end)
-      if ok and entry and entry.value then probe(entry.value) end
-    end)
-  end
   for _, name in ipairs({
     "move_selection_next", "move_selection_previous",
     "move_selection_worse", "move_selection_better",
   }) do
     actions[name]:enhance({ post = on_move })
   end
-  on_move()
 end
 
 local function open_picker(query)
@@ -194,9 +200,15 @@ local function open_picker(query)
     sorting_strategy = "ascending",
     layout_strategy = "vertical",
     layout_config = { width = 9999, height = 9999, prompt_position = "top" },
-    -- No border/rounded chrome: this is meant to read as a page like the
-    -- roadmap, not a floating popup over one.
-    border = false,
+    -- A completion callback runs after every async find/filter pass,
+    -- including the ones typing triggers -- covers the selection changing
+    -- without a `move_selection_*` action ever firing (see `on_move`).
+    on_complete = { on_move },
+    -- Blank borderchars (not `border = false`) keep this reading as a page
+    -- like the roadmap, not a floating popup: a real border window still
+    -- gets created, so the prompt/results titles still render -- just onto
+    -- invisible box edges instead of a visible rounded frame.
+    borderchars = { " ", " ", " ", " ", " ", " ", " ", " " },
     attach_mappings = function(prompt_buf, map)
       state.prompt_buf = prompt_buf
       local function close()
@@ -221,6 +233,20 @@ local function open_picker(query)
         util.err(problem.name .. " doesn't support " .. lang_info.name(config.options.lang))
         refresh()
       end
+      --- Decide open-vs-unsupported from the persisted cache rather than a
+      --- raw `check` result: a probe that could not determine anything (every
+      --- content candidate locked or erroring) leaves the cache unset rather
+      --- than blacklisting the problem, and `is_unsupported` already treats
+      --- "unset" as "not confirmed unsupported" -- matching `entries()`'s own
+      --- filter and avoiding a false "doesn't support X" report on a probe
+      --- that never actually found out.
+      local function decide(problem)
+        if availability.is_unsupported(problem, config.options.lang) then
+          unsupported(problem)
+        else
+          open_selected(problem)
+        end
+      end
       --- Entries here are LeetCode problems, not buffers or files, so
       --- telescope's generic file/buffer actions must not run their default
       --- implementations against them: they index fields (`bufnr`,
@@ -234,20 +260,15 @@ local function open_picker(query)
         local selected = action_state.get_selected_entry()
         if not selected then return end
         local problem = selected.value
-        local known = availability.known(problem)
-        if known then
-          if vim.tbl_contains(known, config.options.lang) then open_selected(problem) else unsupported(problem) end
+        if availability.known(problem) then
+          decide(problem)
           return
         end
-        util.notify("Checking " .. problem.name .. "'s language support…")
-        availability.check(problem, function(languages)
-          vim.schedule(function()
-            if vim.tbl_contains(languages or {}, config.options.lang) then
-              open_selected(problem)
-            else
-              unsupported(problem)
-            end
-          end)
+        if not availability.is_checking(problem) then
+          util.notify("Checking " .. problem.name .. "'s language support…")
+        end
+        availability.check(problem, function()
+          vim.schedule(function() decide(problem) end)
         end)
       end
       actions.select_default:replace(select_current)

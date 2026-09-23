@@ -45,6 +45,16 @@ function M.is_unsupported(problem, lang)
   return not vim.tbl_contains(languages, lang)
 end
 
+--- Whether a probe for `problem` is already in flight. Callers use this to
+--- avoid renotifying "Checking…" for every hover/select while one fetch is
+--- still resolving -- `check` already coalesces the actual work behind
+--- `state.pending`, but callers outside this module have no other way to
+--- see that a wait is already queued.
+function M.is_checking(problem)
+  local key = providers.problem_key(problem)
+  return key ~= nil and state.pending[key] ~= nil
+end
+
 --- Probe every content-chain candidate for `problem` and persist the merged
 --- language set. `cb(languages)` receives the merged set (possibly empty when
 --- every candidate genuinely reports no languages, e.g. a locked problem).

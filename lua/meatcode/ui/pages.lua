@@ -112,19 +112,29 @@ function M.reveal()
   return true
 end
 
---- Re-assert the page's window-local look on every tab switch. Nothing above
---- should ever leave a page dressed with numbers/signs on, but a stray path
---- (manual gt/gT, a `:tabclose` focus quirk, a future bug) is cheap insurance
---- against a window silently keeping the wrong local options.
-vim.api.nvim_create_autocmd("TabEnter", {
+--- Re-assert the page's window-local look on every tab switch, and after any
+--- mode change. Nothing above should ever leave a page dressed with
+--- numbers/signs on, but a stray path (manual gt/gT, a `:tabclose` focus
+--- quirk, a future bug) is cheap insurance against a window silently keeping
+--- the wrong local options. The `InsertLeave`/`ModeChanged` hook exists
+--- because Telescope's search prompt runs in Insert mode: closing it from an
+--- Insert-mode mapping (list.lua's back-navigation) makes Neovim fire
+--- `InsertLeave` only after that mapping's callback returns, i.e. after
+--- `dress()` already ran for the revealed page -- a user's own
+--- `InsertLeave`/`ModeChanged` autocmd (e.g. the common relativenumber
+--- numbertoggle recipe) then fires against the now-current page window and
+--- re-enables what `dress()` just turned off.
+local function reassert()
+  local page = current()
+  if not (page and page.buf and vim.api.nvim_buf_is_valid(page.buf)) then return end
+  local win = vim.fn.bufwinid(page.buf)
+  if win == -1 or vim.api.nvim_win_get_tabpage(win) ~= vim.api.nvim_get_current_tabpage() then return end
+  dress(win)
+end
+
+vim.api.nvim_create_autocmd({ "TabEnter", "InsertLeave", "ModeChanged" }, {
   group = vim.api.nvim_create_augroup("MeatCodePagesDress", { clear = true }),
-  callback = function()
-    local page = current()
-    if not (page and page.buf and vim.api.nvim_buf_is_valid(page.buf)) then return end
-    local win = vim.fn.bufwinid(page.buf)
-    if win == -1 or vim.api.nvim_win_get_tabpage(win) ~= vim.api.nvim_get_current_tabpage() then return end
-    dress(win)
-  end,
+  callback = function() vim.schedule(reassert) end,
 })
 
 return M
