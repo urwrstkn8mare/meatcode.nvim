@@ -2,8 +2,8 @@
 
 `<leader>nr` runs the visible and user-written test cases locally. Opening a
 problem discovers and caches every available oracle, with status messages for
-the statement, each provider and each solution source. Execution itself then
-needs no network.
+the statement, each provider and each solution source, then validates the
+executable ones in the background (below). Execution itself needs no network.
 
 Oracle selection is **stage-major**, strongest first:
 
@@ -13,9 +13,8 @@ Oracle selection is **stage-major**, strongest first:
    simply fall through.
 3. **Popular community solution.** LeetCode candidates arrive most-voted first;
    LintCode candidates are sorted by their like count. Arbitrary community code
-   is not trusted on reputation alone: every candidate must pass every visible
-   case with a known answer. A failure, syntax error or incompatible signature
-   advances to the next candidate.
+   is not trusted on reputation alone: it is only considered when at least one
+   answer is known.
 4. **Known answers.** Answers printed in LeetCode/LintCode statements judge the
    examples they belong to. Answers disclosed by a failed cloud submission are
    cached by problem and exact input and join this set.
@@ -26,12 +25,35 @@ LeetCode is the preferred statement provider; provider preference only breaks
 ties between candidates in the same stage.
 
 An executable solution oracle can judge any input, including cases you wrote.
-Under the final answer-only stage, an unknown custom case still executes and is
-shown as `RAN` with expected output `N/A`. After the cloud judge reveals an
-answer for that exact input, later local runs grade it normally. The results
-panel names the source ultimately selected.
+Under the answer-only stage — before selection, or when every candidate was
+rejected — an unknown custom case still executes and is shown as `RAN` with
+expected output `N/A`. After the cloud judge reveals an answer for that exact
+input, later local runs grade it normally. The results panel names the source
+actually used.
 
 `<leader>ns` remains the real judge and runs the hidden suite.
+
+## Background validation
+
+Executable candidates are validated in the background as soon as the problem
+opens, one at a time in the order above. Each is sandboxed and must pass every
+visible example with a known answer plus every answer learned from a failed
+submission; a reference or editorial with no known answers only has to run the
+visible examples cleanly. A wrong answer, exception, compile error, crash or
+timeout **blacklists** the candidate permanently for that problem and language
+(`stdpath("cache")/meatcode/oracle-validations/`), and the next one is tried
+until one survives or none remain. Coming back later — or another provider
+adding candidates — only ever tries candidates that have not been seen, so a
+fully checked problem re-runs no provider code at all. A stronger stage that
+appears later (e.g. a NeetCode reference) is tried before the current
+selection. A missing sandbox or a problem that cannot run locally stops the
+pass without blacklisting anything.
+
+The survivor immediately precomputes its outputs for your current suite.
+
+A local run never waits on any of this. Until a candidate is selected the run
+is judged by statement/learned answers only (the results panel says validation
+is still in progress); the next run after selection uses the oracle.
 
 ## What runs locally
 
@@ -101,10 +123,10 @@ target=0
 `<leader>na` appends the input from the last failed submission and saves,
 skipping duplicates. When that verdict includes an expected output, the pair is
 also persisted under `stdpath("cache")/meatcode/known-answers/`; it is matched by
-normalised input content rather than case position. If the last local oracle
-was a community solution, it is immediately checked against the new answer.
-A failure discards it for the session and tries the next popular candidate,
-falling back to known answers when none survive.
+normalised input content rather than case position. Known answers changed, so
+the oracle is rechecked in the background: if it fails the new answer it is
+blacklisted and the next candidate is tried, falling back to known answers when
+none survive. The outcome is reported under the verdict.
 
 The suite lives in `<solution-file>.cases`. Before you first save it, it is the
 visible cases plus any legacy `.tests` extras; once saved, the file *is* the
@@ -123,11 +145,11 @@ the smaller of the case count and available CPU count; `1` is sequential and a
 larger number is an explicit worker cap. Shard reports are merged back into
 original case order, so output stays deterministic.
 
-The first executable oracle is sanity-checked as described above. Its source
-hash and the complete known-answer fingerprint are then cached under
-`stdpath("cache")/meatcode/oracle-validations/`. Repeated runs — including after
-reopening Neovim — skip that extra interpreter/compiler pass. A new answer from
-a failed submission changes the fingerprint immediately, forcing revalidation.
+The selected oracle is cached by its source hash and the fingerprint of every
+known answer, next to the blacklist. Reopening a problem, even in a new Neovim
+session, re-runs no provider code, and editing the local suite does not
+invalidate the selection. A new answer from a failed submission changes the
+fingerprint, which rechecks the selection in the background.
 
 Set `parallelism = 1` for solutions that intentionally share process-global or
 filesystem state across otherwise independent cases.
@@ -148,11 +170,12 @@ oracle validation and any first-time computation of an oracle's output for a
 test case run isolated from the network, the home directory/repository and the
 rest of the host filesystem, with only the per-run scratch directory writable.
 Those outputs are cached per problem, language and exact input under
-`stdpath("cache")/meatcode/oracle-outputs/` during the same sandboxed pass that
-validates the oracle against known answers, so known cases are never re-run.
-A later local run only sandboxes the oracle again for cases you added or
-edited. Your own code then runs alone, outside the sandbox, against the
-cached answers.
+`stdpath("cache")/meatcode/oracle-outputs/`: known answers during validation,
+your current suite right after selection. A later local run only sandboxes the
+oracle again for cases you have since added or edited. Your own code then runs
+alone, outside the sandbox, against the cached answers. Background and
+foreground oracle work use separate scratch directories from your runs, so they
+never collide.
 
 On Linux isolation means fresh user, PID, network, IPC and mount namespaces via
 bubblewrap (`bwrap`), exposing `/usr`, the dynamic loader cache and minimal
@@ -166,8 +189,8 @@ vulnerabilities remain in scope. The existing wall-clock timeout limits CPU
 loops but not every denial-of-service shape.
 
 If `bwrap` (Linux) or `sandbox-exec` (macOS) is unavailable, provider-supplied
-executable candidates fail closed and selection continues toward statement/
-learned answers. Setting `runner.sandbox = false` opts out and runs provider
+executable candidates fail closed (without being blacklisted) and runs use
+statement/learned answers. Setting `runner.sandbox = false` opts out and runs provider
 code with your full user permissions: it could read SSH keys/tokens, modify
 files, use the network, spawn processes or otherwise do anything your account
 can do.

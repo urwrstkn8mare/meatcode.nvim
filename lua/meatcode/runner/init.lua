@@ -7,18 +7,18 @@ local util = require("meatcode.util")
 --- Runs a solution against visible cases. Oracle precedence is stage-major:
 --- reference, official editorial, popular community solution, then published
 --- statement answers. Provider fallback order only breaks ties inside a stage.
---- Community code is never trusted blindly: candidates are tried in popularity
---- order and must pass every known example before one may judge user cases.
---- Executable oracles run separately (sandboxed) and their per-case outputs are
---- cached; your code then runs alone against those answers. Cases with no known
---- answer still execute and report RAN under the statement oracle. A cloud
---- judge's revealed expected output is persisted for later runs.
+--- Executable candidates are validated one at a time in the background
+--- (`prepare`), sandboxed against every known answer; community code needs at
+--- least one. Failures are blacklisted permanently, so a later pass only tries
+--- candidates it has not seen. A run never waits for that: until a candidate
+--- is selected it is judged by statement/learned answers, and cases without a
+--- known answer report RAN. Your code always runs alone, unsandboxed.
 local M = {}
 
 M.SUPPORTED = { python = true, cpp = true }
 
---- Strongest potentially available stage. Final selection happens in `run`
---- because executable candidates must first survive their sanity run.
+--- Strongest potentially available stage. The oracle a run actually uses is
+--- `selected`, once `prepare` has validated one.
 ---@return "reference"|"editorial"|"community"|"expected"|nil
 function M.oracle(meta, lang)
   if type(meta) ~= "table" or not M.SUPPORTED[lang] then return nil end
@@ -65,19 +65,17 @@ local function describe(stage, provider, extra)
   return out
 end
 
---- Best-guess oracle description before running anything: the top candidate
---- for the strongest available stage. A community candidate must still pass
---- its known-case validation at run time (see `resolve_source`), so this is
---- a preview of what will likely be used, not a guarantee — a candidate that
---- fails validation falls through to the next one silently.
+--- The oracle local runs currently use: the validated selection, or known
+--- answers while validation is pending or after every candidate was rejected.
 ---@return string|nil
-function M.describe(meta, lang)
-  local stage = M.oracle(meta, lang)
-  if not stage then return nil end
-  if stage == "expected" then return describe("expected") end
-  local candidates = type(meta.oracle_candidates) == "table" and meta.oracle_candidates[stage] or nil
-  local top = type(candidates) == "table" and candidates[1] or nil
-  return describe(stage, top and top.provider, top)
+function M.describe(problem_id, meta, lang)
+  if not M.oracle(meta, lang) then return nil end
+  local selected = M.selected(problem_id, lang, meta)
+  if selected then return describe(selected.stage, selected.provider, selected) end
+  if M.preparing(problem_id, lang) then
+    return describe("expected") .. " (validating executable oracle candidates in the background)"
+  end
+  return describe("expected")
 end
 
 --- Description of the oracle a finished run actually used.
@@ -85,8 +83,12 @@ end
 ---@return string|nil
 function M.describe_result(result)
   if not result.oracle_stage then return nil end
-  return describe(result.oracle_stage, result.oracle_provider,
+  local out = describe(result.oracle_stage, result.oracle_provider,
     { title = result.oracle_title, votes = result.oracle_votes })
+  if result.oracle_pending then
+    out = out .. " (executable oracle still validating in the background)"
+  end
+  return out
 end
 
 local function case_key(block)
@@ -158,8 +160,12 @@ local function harness_dir()
   return vim.fs.dirname(vim.fn.fnamemodify(this, ":p")) .. "/harness"
 end
 
-local function workdir(problem_id, lang)
-  local dir = string.format("%s/run/%s-%s", config.options.cache_dir, problem_id, lang)
+--- Scratch directory for one run. `scope` separates background oracle work
+--- ("oracle"), foreground oracle outputs ("probe") and your own runs (nil),
+--- which may execute concurrently.
+local function workdir(problem_id, lang, scope)
+  local dir = string.format("%s/run/%s-%s%s", config.options.cache_dir, problem_id, lang,
+    scope and ("-" .. scope) or "")
   util.mkdirp(dir)
   return dir
 end
@@ -499,7 +505,7 @@ local function declared_types(meta)
 end
 
 local function run_python(problem_id, code, meta, cases, cb, oracle)
-  local dir = workdir(problem_id, "python")
+  local dir = workdir(problem_id, "python", meta._scope)
   local ref = signature_source(meta, "python", oracle)
   if not ref or ref == "" then
     return fail(cb, "no Python starter code to derive the signature from", true)
@@ -525,7 +531,7 @@ end
 --- Design problems: normalise the call sequence, then replay it in the harness.
 --- `mode` is "class" for an operation sequence, "roundtrip" for encode/decode.
 local function run_python_class(problem_id, code, meta, cases, cb, mode, oracle)
-  local dir = workdir(problem_id, "python")
+  local dir = workdir(problem_id, "python", meta._scope)
   local ref = signature_source(meta, "python", oracle)
   if not ref or ref == "" then
     return fail(cb, "no Python starter code to derive the signature from", true)
@@ -562,7 +568,7 @@ local function run_python_class(problem_id, code, meta, cases, cb, mode, oracle)
 end
 
 local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle)
-  local dir = workdir(problem_id, "cpp")
+  local dir = workdir(problem_id, "cpp", meta._scope)
   local starter = meta.starterCode and meta.starterCode.cpp
   if not starter or starter == "" then
     return fail(cb, "no C++ starter code to derive the signature from", true)
@@ -653,6 +659,8 @@ local function run_selected(problem_id, code, lang, meta, cases, cb, oracle)
   return run_cpp(problem_id, code, meta, cases, cb, kind, oracle)
 end
 
+--- Executable candidates in precedence order: stage-major, then provider
+--- order, then popularity (the order providers list them in).
 local function source_candidates(meta, lang)
   local out = {}
   for _, stage in ipairs({ "reference", "editorial", "community" }) do
@@ -660,23 +668,85 @@ local function source_candidates(meta, lang)
       and type(meta.oracle_candidates[stage]) == "table"
       and meta.oracle_candidates[stage] or {}) do
       if type(candidate.code) == "string" and candidate.code ~= "" then
-        table.insert(out,
-          vim.tbl_extend("force", vim.deepcopy(candidate), { stage = stage }))
+        table.insert(out, vim.tbl_extend("force", {}, candidate,
+          { stage = stage, code_hash = vim.fn.sha256(candidate.code) }))
       end
     end
   end
   if #out == 0 then
     local code = type(meta.solutions) == "table" and meta.solutions[lang] or nil
     if type(code) == "string" and code ~= "" then
-      table.insert(out, { stage = "reference", provider = "neetcode", code = code })
+      table.insert(out, { stage = "reference", provider = "neetcode", code = code,
+        code_hash = vim.fn.sha256(code) })
     end
   end
   return out
 end
 
-local function validation_path(problem_id, lang)
+--- Every input with a known answer: the provider's visible examples that
+--- carry a published answer, plus inputs a failed submission disclosed.
+--- Independent of the editable suite, so editing cases never invalidates a
+--- selection. Returns the cases, their fingerprint, and the visible examples
+--- (what a reference/editorial is smoke-run on when nothing is known).
+local function validation_set(problem_id, meta)
+  local defaults = type(meta.custom_test_cases) == "table" and meta.custom_test_cases or {}
+  local inputs, seen = {}, {}
+  for _, case in ipairs(defaults) do
+    local key = type(case) == "string" and case_key(case) or ""
+    if key ~= "" and not seen[key] then
+      seen[key] = true
+      table.insert(inputs, case)
+    end
+  end
+  for key in pairs(util.read_json(learned_path(problem_id)) or {}) do
+    if type(key) == "string" and key ~= "" and not seen[key] then
+      seen[key] = true
+      table.insert(inputs, key)
+    end
+  end
+  local known, parts = {}, {}
+  for i, value in ipairs(expected_values(problem_id, meta, inputs)) do
+    if value ~= vim.NIL then
+      table.insert(known, inputs[i])
+      table.insert(parts, case_key(inputs[i]) .. "\0" .. tostring(value))
+    end
+  end
+  table.sort(parts)
+  return known, vim.fn.sha256(table.concat(parts, "\1")), defaults
+end
+
+--- Selection and blacklist for one problem/language:
+--- `selection` is the candidate that passed against the fingerprint
+--- `validation_key`; `rejected` maps code hashes of candidates that failed
+--- known answers (or did not compile/run) to why. Known answers only grow, so
+--- a rejection is permanent: later passes go straight to untried candidates.
+local function state_path(problem_id, lang)
   return string.format("%s/oracle-validations/%s-%s.json",
     config.options.cache_dir, util.slug(tostring(problem_id)), lang)
+end
+
+local function load_state(problem_id, lang)
+  local raw = util.read_json(state_path(problem_id, lang))
+  raw = type(raw) == "table" and raw or {}
+  return {
+    selection = type(raw.selection) == "table" and raw.selection or nil,
+    rejected = type(raw.rejected) == "table" and raw.rejected or {},
+  }
+end
+
+local function save_state(problem_id, lang, state)
+  util.write_json(state_path(problem_id, lang), {
+    selection = state.selection,
+    rejected = next(state.rejected) and state.rejected or vim.empty_dict(),
+  })
+end
+
+local function is_selection(selection, candidate, validation_key)
+  return type(selection) == "table"
+    and selection.code_hash == candidate.code_hash
+    and selection.stage == candidate.stage
+    and selection.provider == candidate.provider
+    and selection.validation_key == validation_key
 end
 
 --- Per-case outputs from the selected executable oracle. Kept separate from
@@ -687,60 +757,54 @@ local function oracle_outputs_path(problem_id, lang)
     config.options.cache_dir, util.slug(tostring(problem_id)), lang)
 end
 
-local function empty_oracle_cache(candidate, code_hash)
-  return {
+local function load_oracle_cache(problem_id, lang, candidate)
+  local cached = util.read_json(oracle_outputs_path(problem_id, lang))
+  if type(cached) ~= "table"
+    or cached.code_hash ~= candidate.code_hash
+    or cached.stage ~= candidate.stage
+    or cached.provider ~= candidate.provider then
+    return {}
+  end
+  return type(cached.outputs) == "table" and cached.outputs or {}
+end
+
+--- Merge fresh outputs into the on-disk cache. Background preparation and a
+--- foreground run may both add outputs, so re-read rather than overwrite.
+local function persist_oracle_outputs(problem_id, lang, candidate, fresh)
+  local outputs = load_oracle_cache(problem_id, lang, candidate)
+  for key, value in pairs(fresh) do outputs[key] = value end
+  util.write_json(oracle_outputs_path(problem_id, lang), {
     stage = candidate.stage,
     provider = candidate.provider,
     id = candidate.id,
-    code_hash = code_hash,
-    outputs = {},
-  }
-end
-
-local function load_oracle_cache(problem_id, lang, candidate)
-  local code_hash = vim.fn.sha256(candidate.code)
-  local cached = util.read_json(oracle_outputs_path(problem_id, lang))
-  if type(cached) ~= "table"
-    or cached.code_hash ~= code_hash
-    or cached.stage ~= candidate.stage
-    or cached.provider ~= candidate.provider then
-    return empty_oracle_cache(candidate, code_hash)
-  end
-  cached.outputs = type(cached.outputs) == "table" and cached.outputs or {}
-  return cached
-end
-
-local function persist_oracle_cache(problem_id, lang, cache)
-  util.write_json(oracle_outputs_path(problem_id, lang), {
-    stage = cache.stage,
-    provider = cache.provider,
-    id = cache.id,
-    code_hash = cache.code_hash,
-    outputs = cache.outputs,
+    code_hash = candidate.code_hash,
+    outputs = next(outputs) and outputs or vim.empty_dict(),
   })
+  return outputs
 end
 
---- Record actuals from a sandboxed oracle probe / validation onto the cache.
-local function absorb_oracle_actuals(cache, report)
-  local errors = {}
+--- Actuals from a sandboxed oracle run, keyed by case.
+local function oracle_actuals(report)
+  local outputs, errors = {}, {}
   for _, c in ipairs(type(report) == "table" and report.cases or {}) do
     if c.status == "error" or c.status == "oracle_error" then
       table.insert(errors, (type(c.error) == "string" and c.error:match("^[^\n]+")) or c.status)
     elseif type(c.input) == "string" and type(c.actual) == "string" then
-      cache.outputs[case_key(c.input)] = c.actual
+      outputs[case_key(c.input)] = c.actual
     end
   end
-  return errors
+  return outputs, errors
 end
 
---- Ensure every case has an oracle output. Validation already seeds known
---- cases; this only sandboxes the selected provider solution for inputs that
---- are still missing (typically cases the user just added).
-local function ensure_oracle_outputs(problem_id, lang, meta, candidate, cases, cb, status)
-  local cache = load_oracle_cache(problem_id, lang, candidate)
+--- Ensure every case has an oracle output, sandboxing the selected provider
+--- solution only for inputs that are still missing (typically cases the user
+--- just added). `scope` keeps concurrent oracle runs out of each other's
+--- scratch directory.
+local function ensure_oracle_outputs(problem_id, lang, meta, candidate, cases, cb, status, scope)
+  local outputs = load_oracle_cache(problem_id, lang, candidate)
   local missing, cached_n = {}, 0
   for _, case in ipairs(cases) do
-    local out = cache.outputs[case_key(case)]
+    local out = outputs[case_key(case)]
     if type(out) == "string" and out ~= "" then
       cached_n = cached_n + 1
     else
@@ -749,7 +813,7 @@ local function ensure_oracle_outputs(problem_id, lang, meta, candidate, cases, c
   end
 
   if #missing == 0 then
-    return cb(nil, cache.outputs)
+    return cb(nil, outputs)
   end
 
   if status then
@@ -758,10 +822,12 @@ local function ensure_oracle_outputs(problem_id, lang, meta, candidate, cases, c
       #missing, #missing == 1 and "" or "s", cached_n))
   end
 
-  local trial_meta = vim.deepcopy(meta)
-  trial_meta._untrusted_user = true
-  trial_meta._probe_oracle = true
-  trial_meta.oracle_answers = {}
+  local trial_meta = vim.tbl_extend("force", {}, meta, {
+    _untrusted_user = true,
+    _probe_oracle = true,
+    _scope = scope,
+    oracle_answers = {},
+  })
   trial_meta.expected_outputs = nil
   trial_meta.custom_test_cases = nil
   trial_meta._oracle_outputs = nil
@@ -773,118 +839,181 @@ local function ensure_oracle_outputs(problem_id, lang, meta, candidate, cases, c
     if report.error and #(report.cases or {}) == 0 then
       return cb(report.error, nil)
     end
-    local errors = absorb_oracle_actuals(cache, report)
+    local fresh, errors = oracle_actuals(report)
     if #errors > 0 then
       return cb("oracle failed on a case: " .. errors[1], nil)
     end
-    -- Every missing case should now have an output.
     for _, case in ipairs(missing) do
-      local out = cache.outputs[case_key(case)]
+      local out = fresh[case_key(case)]
       if type(out) ~= "string" or out == "" then
         return cb("oracle produced no output for a case", nil)
       end
     end
-    persist_oracle_cache(problem_id, lang, cache)
-    cb(nil, cache.outputs)
+    cb(nil, persist_oracle_outputs(problem_id, lang, candidate, fresh))
   end, "expected")
 end
 
-local function saved_selection(problem_id, lang, meta)
-  return meta._selected_oracle or util.read_json(validation_path(problem_id, lang))
+--- The executable oracle validated against the current known answers, or nil
+--- when none has been (yet). Synchronous: never executes anything.
+---@return table|nil candidate
+function M.selected(problem_id, lang, meta)
+  local state = load_state(problem_id, lang)
+  if not state.selection then return nil end
+  local _, validation_key = validation_set(problem_id, meta)
+  for _, candidate in ipairs(source_candidates(meta, lang)) do
+    if is_selection(state.selection, candidate, validation_key)
+      and not state.rejected[candidate.code_hash] then
+      return candidate
+    end
+  end
+  return nil
 end
 
-local function save_selection(problem_id, lang, meta, candidate, validation_key)
-  candidate.validation_key = validation_key
-  candidate.code_hash = vim.fn.sha256(candidate.code)
-  meta._selected_oracle = vim.deepcopy(candidate)
-  util.write_json(validation_path(problem_id, lang), {
-    stage = candidate.stage,
-    provider = candidate.provider,
-    id = candidate.id,
-    code_hash = candidate.code_hash,
-    validation_key = validation_key,
-  })
-end
-
---- Pick the first executable source under stage-major/provider-minor order.
---- Community candidates require known answers; a popularity ranking alone is
---- never enough to make arbitrary user code an oracle.
-local function resolve_source(problem_id, lang, meta, cases, cb, status)
+--- Walk candidates in precedence order, one at a time. Blacklisted ones are
+--- skipped; the saved selection is accepted without re-running when the known
+--- answers are unchanged; anything else is sandboxed against the known answers
+--- and either selected or blacklisted. A stronger candidate that appeared
+--- since the last pass is therefore tried before the saved selection.
+---@param cb fun(candidate: table|nil, rejected: table[], err: string|nil)
+local function select_oracle(problem_id, lang, meta, cb, status)
   local candidates = source_candidates(meta, lang)
-  local values = expected_values(problem_id, meta, cases)
-  local known = {}
-  for i, value in ipairs(values) do
-    if value ~= vim.NIL then table.insert(known, cases[i]) end
-  end
-  local fingerprint_parts = {}
-  for i, value in ipairs(values) do
-    if value ~= vim.NIL then
-      table.insert(fingerprint_parts, case_key(cases[i]) .. "\0" .. tostring(value))
-    end
-  end
-  local validation_key = vim.fn.sha256(table.concat(fingerprint_parts, "\1"))
-  local selected = saved_selection(problem_id, lang, meta)
-  if type(selected) == "table" and selected.validation_key == validation_key then
-    for _, candidate in ipairs(candidates) do
-      if candidate.stage == selected.stage and candidate.provider == selected.provider
-        and (selected.code == nil or candidate.code == selected.code)
-        and (selected.code_hash == nil or vim.fn.sha256(candidate.code) == selected.code_hash) then
-        if status then
-          status(string.format("Using cached %s %s oracle",
-            candidate.provider or "local", candidate.stage))
-        end
-        return cb(candidate, {})
-      end
-    end
-    meta._selected_oracle = nil
-  end
-  local index, rejected = 1, {}
+  local known, validation_key, defaults = validation_set(problem_id, meta)
+  local state = load_state(problem_id, lang)
+  local index, rejected = 0, {}
+
   local function step()
-    local candidate = candidates[index]
     index = index + 1
+    local candidate = candidates[index]
     if not candidate then
-      meta._selected_oracle = nil
+      if state.selection then
+        state.selection = nil
+        save_state(problem_id, lang, state)
+      end
       return cb(nil, rejected)
     end
+    if state.rejected[candidate.code_hash] then return step() end
+    -- Popularity alone never makes community code an oracle.
     if candidate.stage == "community" and #known == 0 then return step() end
-    local trial_meta = vim.deepcopy(meta)
-    trial_meta._oracle_code = candidate.code
-    trial_meta._untrusted_user = true
-    local trial_cases = #known > 0 and known or cases
-    local trial_oracle = #known > 0 and "expected" or "reference"
+    if is_selection(state.selection, candidate, validation_key) then
+      return cb(candidate, rejected)
+    end
+    local trial_cases = #known > 0 and known or defaults
+    if #trial_cases == 0 then return step() end
+
     if status then
       local workers = parallelism(#trial_cases)
       status(string.format("Validating %s %s candidate %d/%d · %d worker%s",
-        candidate.provider or "local", candidate.stage, index - 1, #candidates,
+        candidate.provider or "local", candidate.stage, index, #candidates,
         workers, workers == 1 and "" or "s"))
     end
-    run_selected(problem_id, candidate.code, lang,
-      trial_meta, trial_cases, function(report)
-        if report.ok and report.total > 0 and report.passed == report.total then
-          save_selection(problem_id, lang, meta, candidate, validation_key)
-          -- Same sandboxed pass that proved the candidate also seeds its
-          -- per-case outputs, so known cases are never re-executed later.
-          local cache = load_oracle_cache(problem_id, lang, candidate)
-          absorb_oracle_actuals(cache, report)
-          persist_oracle_cache(problem_id, lang, cache)
-          return cb(candidate, rejected)
-        end
-        if status then
-          local reason = (report.error or "Candidate failed known cases"):match("^[^\n]+")
-          status(reason .. " — trying next source")
-        end
-        table.insert(rejected, candidate)
-        step()
-      end, trial_oracle)
+    local trial_meta = vim.tbl_extend("force", {}, meta, {
+      _oracle_code = candidate.code,
+      _untrusted_user = true,
+      _scope = "oracle",
+    })
+    run_selected(problem_id, candidate.code, lang, trial_meta, trial_cases, function(report)
+      if report.ok and report.total > 0 and report.passed == report.total then
+        state.selection = {
+          stage = candidate.stage,
+          provider = candidate.provider,
+          id = candidate.id,
+          code_hash = candidate.code_hash,
+          validation_key = validation_key,
+        }
+        save_state(problem_id, lang, state)
+        -- The pass that proved the candidate also seeds its per-case outputs.
+        persist_oracle_outputs(problem_id, lang, candidate, (oracle_actuals(report)))
+        return cb(candidate, rejected)
+      end
+      if report.unsupported then
+        -- Not this candidate's fault (no sandbox, or the problem cannot run
+        -- locally at all): every other candidate would fail the same way.
+        return cb(nil, rejected, report.error)
+      end
+      -- The last line carries the point of a traceback/compiler dump.
+      local reason = (report.error or "failed known cases"):match("([^\n]+)%s*$")
+        or "failed known cases"
+      state.rejected[candidate.code_hash] = {
+        stage = candidate.stage, provider = candidate.provider,
+        id = candidate.id, reason = reason,
+      }
+      save_state(problem_id, lang, state)
+      table.insert(rejected, candidate)
+      if status then status(reason .. " — trying next candidate") end
+      step()
+    end, #known > 0 and "expected" or "reference")
   end
   step()
 end
 
+---@type table<string, {waiters: function[], again: table|nil}>
+local jobs = {}
+
+local function job_key(problem_id, lang)
+  return tostring(problem_id) .. "\0" .. lang
+end
+
+--- Whether a background preparation is in flight for this problem/language.
+function M.preparing(problem_id, lang)
+  return jobs[job_key(problem_id, lang)] ~= nil
+end
+
+--- Select (or confirm) the executable oracle in the background and precompute
+--- its outputs for `cases`, so a later run never waits on provider code.
+--- Single-flight per problem/language: a call while one is in flight queues
+--- exactly one more pass with the latest arguments (e.g. new candidates from
+--- another provider, or a newly learned answer), and every caller's `cb`
+--- receives the outcome of the final pass.
+---@param cb fun(info: {stage: string, provider: string|nil, id: any, title: string|nil, votes: number|nil, rejected: integer, error: string|nil})|nil
+function M.prepare(problem_id, lang, meta, cases, cb, status)
+  local key = job_key(problem_id, lang)
+  local job = jobs[key]
+  if job then
+    job.again = { meta = meta, cases = cases, status = status }
+    if cb then table.insert(job.waiters, cb) end
+    return
+  end
+  job = { waiters = cb and { cb } or {} }
+  jobs[key] = job
+  local rejected_total = 0
+
+  local function pass(pass_meta, pass_cases, pass_status)
+    select_oracle(problem_id, lang, pass_meta, function(candidate, rejected, err)
+      rejected_total = rejected_total + #rejected
+      local function done(output_err)
+        if job.again then
+          local nxt = job.again
+          job.again = nil
+          return pass(nxt.meta, nxt.cases, nxt.status)
+        end
+        jobs[key] = nil
+        local info = {
+          stage = candidate and candidate.stage or "expected",
+          provider = candidate and candidate.provider or nil,
+          id = candidate and candidate.id or nil,
+          title = candidate and candidate.title or nil,
+          votes = candidate and candidate.votes or nil,
+          rejected = rejected_total,
+          error = err or output_err,
+        }
+        for _, waiter in ipairs(job.waiters) do waiter(info) end
+      end
+      if not candidate or type(pass_cases) ~= "table" or #pass_cases == 0 then
+        return done()
+      end
+      ensure_oracle_outputs(problem_id, lang, pass_meta, candidate, pass_cases,
+        function(output_err) done(output_err) end, pass_status, "oracle")
+    end, pass_status)
+  end
+  pass(meta, cases, status)
+end
+
 --- Run `code` against `cases` locally.
 ---
---- Provider oracles execute separately (sandboxed) and their outputs are
---- cached per case. Your solution then runs alone against those answers, so a
---- re-run with unchanged cases never re-enters the sandbox for the oracle.
+--- Uses the executable oracle `prepare` already validated; outputs for cases
+--- it has not seen yet are computed (sandboxed) first. Until one is
+--- validated, the run is judged by statement/learned answers alone and never
+--- waits on validation. Your solution always runs alone, unsandboxed.
 function M.run(problem_id, code, lang, meta, cases, cb, status)
   if not M.SUPPORTED[lang] then
     return fail(cb, string.format("local runs are not supported for %s yet", lang), true)
@@ -896,69 +1025,40 @@ function M.run(problem_id, code, lang, meta, cases, cb, status)
     return fail(cb, "no starter code is available for a local run", true)
   end
 
-  resolve_source(problem_id, lang, meta, cases, function(candidate)
-    local function run_user(outputs)
-      local selected = vim.deepcopy(meta)
-      selected._oracle_code = nil
-      selected._oracle_outputs = outputs
-      local workers = parallelism(#cases)
-      if status then
-        if candidate then
-          status(string.format(
-            "Running with %s %s oracle · %d worker%s",
-            candidate.provider, candidate.stage,
-            workers, workers == 1 and "" or "s"))
-        else
-          status(string.format(
-            "Running with statement/learned answers · %d worker%s",
-            workers, workers == 1 and "" or "s"))
-        end
-      end
-      run_selected(problem_id, code, lang, selected, cases, function(report)
-        report.oracle_stage = candidate and candidate.stage or "expected"
-        report.oracle_provider = candidate and candidate.provider or nil
-        report.oracle_id = candidate and candidate.id or nil
-        report.oracle_title = candidate and candidate.title or nil
-        report.oracle_votes = candidate and candidate.votes or nil
-        cb(report)
-      end, "expected")
-    end
+  local candidate = M.selected(problem_id, lang, meta)
+  local pending = not candidate and M.preparing(problem_id, lang)
 
-    if not candidate then
-      return run_user(nil)
+  local function run_user(outputs)
+    local selected = vim.tbl_extend("force", {}, meta, { _oracle_outputs = outputs })
+    selected._oracle_code = nil
+    local workers = parallelism(#cases)
+    if status then
+      status(string.format("Running with %s · %d worker%s",
+        candidate and string.format("%s %s oracle", candidate.provider, candidate.stage)
+          or pending and "statement/learned answers (oracle still validating)"
+          or "statement/learned answers",
+        workers, workers == 1 and "" or "s"))
     end
-    ensure_oracle_outputs(problem_id, lang, meta, candidate, cases, function(err, outputs)
-      if err then
-        return fail(cb, err)
-      end
-      run_user(outputs)
-    end, status)
-  end, status)
-end
+    run_selected(problem_id, code, lang, selected, cases, function(report)
+      report.oracle_stage = candidate and candidate.stage or "expected"
+      report.oracle_provider = candidate and candidate.provider or nil
+      report.oracle_id = candidate and candidate.id or nil
+      report.oracle_title = candidate and candidate.title or nil
+      report.oracle_votes = candidate and candidate.votes or nil
+      report.oracle_pending = pending or nil
+      cb(report)
+    end, "expected")
+  end
 
---- Re-run oracle selection after the cloud judge teaches us a new answer.
---- Rejected community candidates are removed from this session so subsequent
---- runs start at the newly selected candidate rather than retrying known-bad
---- code.
-function M.revalidate(problem_id, lang, meta, cases, cb, status)
-  resolve_source(problem_id, lang, meta, cases, function(candidate, rejected)
-    local bad = {}
-    for _, item in ipairs(rejected or {}) do
-      if item.stage == "community" then bad[item.code] = true end
+  if not candidate then
+    return run_user(nil)
+  end
+  ensure_oracle_outputs(problem_id, lang, meta, candidate, cases, function(err, outputs)
+    if err then
+      return fail(cb, err)
     end
-    if type(meta.oracle_candidates) == "table"
-      and type(meta.oracle_candidates.community) == "table" then
-      meta.oracle_candidates.community = vim.tbl_filter(function(item)
-        return not bad[item.code]
-      end, meta.oracle_candidates.community)
-    end
-    cb({
-      stage = candidate and candidate.stage or "expected",
-      provider = candidate and candidate.provider or nil,
-      id = candidate and candidate.id or nil,
-      rejected = #vim.tbl_keys(bad),
-    })
-  end, status)
+    run_user(outputs)
+  end, status, "probe")
 end
 
 return M

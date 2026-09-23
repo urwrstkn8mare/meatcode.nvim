@@ -145,13 +145,21 @@ solution, then statement/judge-learned answers. Provider fallback order only
 breaks ties inside one stage, so a NeetCode reference beats a preferred
 LeetCode editorial.
 
-Community candidates are ordered by LeetCode votes or LintCode likes and must
-pass every visible case with a known answer. A failure advances to the next
-candidate. Reference/editorial/community sources judge arbitrary custom inputs.
-Under answer-only fallback, an unknown input runs with expected output N/A.
-When a failed submission discloses the answer, it is cached for that exact
-input. If a community oracle was in use, it is rechecked immediately; failure
-discards it for the session and advances to the next candidate.
+Executable candidates are validated in the background as soon as the problem
+opens, one at a time in that order; community candidates are ordered by
+LeetCode votes or LintCode likes and need at least one known answer. Each must
+pass every visible example with a known answer plus every judge-learned answer.
+A candidate that fails is blacklisted permanently for that problem and
+language, so later passes (reopening the problem, another provider adding
+candidates) only try candidates not yet seen. The first survivor becomes the
+oracle and immediately precomputes outputs for your current suite.
+
+A local run never waits for validation: until a candidate is selected, it is
+judged by statement/learned answers alone, and an input without a known answer
+runs with expected output N/A. The next run after selection uses the oracle,
+which judges arbitrary custom inputs. When a failed submission discloses an
+answer, it is cached for that exact input and the oracle is rechecked in the
+background; a failure blacklists it and advances to the next candidate.
 
 Both `function` and `class` problems run locally, in Python and C++. Supported
 types are integers, floats, booleans, chars, strings, nested vectors/lists of
@@ -167,11 +175,12 @@ round-tripping the input through both halves, which needs no oracle at all.
 
 Provider solutions are remote code. They run separately from your solution:
 oracle validation and first-time per-case output computation are sandboxed
-(cached thereafter), then your code runs alone against those answers. Default
-isolation denies network and home/repository access, with only the per-run
-scratch directory writable: bubblewrap (`bwrap`) on Linux (which also hides
-the host process table behind a PID namespace), Apple's `sandbox-exec` on
-macOS. Missing either fails closed and falls through to answer-only judging.
+(cached thereafter), then your code runs alone, unsandboxed, against those
+answers. Default isolation denies network and home/repository access, with
+only the per-run scratch directory writable: bubblewrap (`bwrap`) on Linux
+(which also hides the host process table behind a PID namespace), Apple's
+`sandbox-exec` on macOS. Missing either fails closed (without blacklisting any
+candidate) and falls through to answer-only judging.
 `runner.sandbox = false` opts into running provider code with your full user
 permissions. Neither is a VM: the host kernel is shared and memory/process
 resources are not cgroup-limited.
@@ -202,9 +211,10 @@ Legacy extra test cases can be added in a file next to your solution named
 
 Independent cases run concurrently in separate processes and are merged back
 into case order. `runner.parallelism = 0` uses up to the CPU count, `1` is
-sequential, and N caps workers at N. Validated executable oracles are cached by
-source hash plus known-answer fingerprint, so repeated/reopened runs skip the
-extra validation pass. A judge-learned answer invalidates that cache.
+sequential, and N caps workers at N. The selected oracle is cached by source
+hash plus known-answer fingerprint and the blacklist by source hash, so
+reopening a problem re-runs no provider code. Editing the local suite does not
+invalidate either; a judge-learned answer rechecks the selection.
 
 ==============================================================================
 7. CONFIGURATION                                           *meatcode-config*

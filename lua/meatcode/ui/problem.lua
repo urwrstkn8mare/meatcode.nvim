@@ -272,11 +272,10 @@ end
 local function render_ready(s)
   local keys = config.options.keys.problem
   local submit_backend = providers.get(s.submit_provider)
-  local oracle = runner.oracle(s.meta, s.lang)
-  local local_note = oracle
-      and ("Local oracle: " .. runner.describe(s.meta, s.lang)
-        .. " — falls back through reference → editorial → community → statement if it fails validation.")
+  local oracle = runner.describe(providers.filename(s.problem), s.meta, s.lang)
+  local local_note = oracle and ("Local oracle: " .. oracle .. ".")
     or "No local starter is available; submit to run the hidden suite."
+  s.panel = "ready"
   local entries = {
     { keys.run, "run local tests" },
     { keys.submit, "submit to " .. submit_backend.label },
@@ -326,6 +325,35 @@ local function render_ready(s)
   vim.api.nvim_buf_set_lines(s.res_buf, 0, -1, false, lines)
   vim.bo[s.res_buf].modifiable = false
   hl.apply(s.res_buf, spans)
+end
+
+--- Validate the executable oracle in the background (`runner.prepare`) and
+--- precompute its outputs for the current suite, so local runs never wait on
+--- provider code. A spinner appears only when something actually executes.
+local function prepare_oracle(s, on_done)
+  if not runner.oracle(s.meta, s.lang) then return end
+  local handle
+  runner.prepare(providers.filename(s.problem), s.lang, s.meta,
+    tests.read(s.path, s.meta.custom_test_cases),
+    function(info)
+      vim.schedule(function()
+        if handle then
+          handle:finish(info.error
+            and ("Local oracle check stopped: " .. info.error:match("^[^\n]*"))
+            or ("Local oracle: " .. runner.describe(providers.filename(s.problem), s.meta, s.lang)))
+        end
+        if session_alive(s) and s.panel == "ready"
+          and s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+          pcall(render_ready, s)
+        end
+        if on_done then on_done(info) end
+      end)
+    end,
+    function(message)
+      vim.schedule(function()
+        if handle then handle:report(message) else handle = util.progress(message) end
+      end)
+    end)
 end
 
 --- `code` with the Python auto-import block prepended, when the language is
@@ -574,12 +602,10 @@ function M.run()
 
   local cases = test_cases(s)
   s.busy = true
+  s.panel = "run"
   results.running(s.res_buf, "Running " .. #cases .. " local test case" .. (#cases == 1 and "" or "s"))
 
   runner.run(providers.filename(s.problem), current_code(s), s.lang, s.meta, cases, function(result)
-    s.last_oracle = {
-      stage = result.oracle_stage, provider = result.oracle_provider, id = result.oracle_id,
-    }
     vim.schedule(function()
       -- Only cleared once the render actually lands: clearing it back in the
       -- runner callback (before this scheduled tail runs) would let a
@@ -605,41 +631,26 @@ local function accepted(s)
   pcall(function() require("meatcode.ui.list").refresh() end)
 end
 
-local function revalidate_community(s, submission)
-  if not submission.learned or not s.last_oracle
-    or s.last_oracle.stage ~= "community" then
-    return false
-  end
-  local cases = test_cases(s)
-  table.insert(cases, s.failed_input)
-  s.busy = true
-  submission.oracle_update = "Revalidating community oracle against the newly learned answer…"
-  results.render_submit(s.res_buf, submission)
-  runner.revalidate(providers.filename(s.problem), s.lang, s.meta, cases, function(info)
-    s.busy = false
-    s.last_oracle = info
-    if info.stage == "community" then
-      submission.oracle_update = info.rejected > 0
-          and string.format("Rejected %d community oracle(s); switched to %s community solution.",
-            info.rejected, info.provider or "the next")
-        or "The current community oracle still passes the newly learned case."
-    elseif info.stage == "expected" then
+--- A failed submission disclosed an answer, so the known answers changed:
+--- recheck the oracle in the background (a candidate failing the new answer
+--- is blacklisted and the next one tried) and report the outcome under the
+--- verdict while it is still on screen.
+local function recheck_oracle(s, submission)
+  submission.oracle_update = "Rechecking the local oracle against the newly learned answer…"
+  prepare_oracle(s, function(info)
+    local current = runner.describe(providers.filename(s.problem), s.meta, s.lang)
+    if info.error then
+      submission.oracle_update = "Oracle check stopped: " .. info.error:match("^[^\n]*")
+    elseif info.rejected > 0 then
       submission.oracle_update = string.format(
-        "Rejected %d community oracle(s); falling back to known answers.", info.rejected)
+        "Rejected %d oracle candidate(s); local runs now use %s.", info.rejected, current)
     else
-      submission.oracle_update = string.format(
-        "Community oracle replaced by %s %s solution.", info.provider or "local", info.stage)
+      submission.oracle_update = "Local runs still use " .. current .. "."
     end
-    if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
-      results.render_submit(s.res_buf, submission)
-    end
-  end, function(message)
-    submission.oracle_update = message .. "…"
-    if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+    if s.panel == submission and s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
       results.render_submit(s.res_buf, submission)
     end
   end)
-  return true
 end
 
 function M.submit()
@@ -654,22 +665,16 @@ function M.submit()
 
   local backend = providers.get(s.submit_provider)
   s.busy = true
+  s.panel = "submit"
   results.running(s.res_buf, "Submitting to " .. backend.label)
 
   backend.submit(s.problem, s.meta, current_code(s), s.lang, function(err, data)
     vim.schedule(function()
-      -- `s.busy` is cleared per-branch below, not eagerly here: a submit
-      -- that turns out not accepted may chain straight into
-      -- `revalidate_community`, which starts another async job and expects
-      -- to own `s.busy` until *it* finishes. Clearing it up front would let
-      -- a keypress land between this job completing and that chained one
-      -- starting, running two runner jobs against the same workdir at once.
+      s.busy = false
       if not (s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf)) then
-        s.busy = false
         return
       end
       if err then
-        s.busy = false
         return results.render_submit_error(s.res_buf, backend.name, err)
       end
       local submission = backend.normalize_submission(data)
@@ -682,12 +687,13 @@ function M.submit()
         -- input even when no executable source survives oracle selection.
         submission.learned = true
       end
+      if submission.learned and not submission.accepted and runner.oracle(s.meta, s.lang) then
+        recheck_oracle(s, submission)
+      end
+      s.panel = submission
       results.render_submit(s.res_buf, submission)
       if submission.accepted then
-        s.busy = false
         accepted(s)
-      elseif not revalidate_community(s, submission) then
-        s.busy = false
       end
     end)
   end)
@@ -1552,14 +1558,13 @@ function M.open(problem, opts)
           opening[key] = nil
           render_description(s)
           keymaps(s)
+          prepare_oracle(s)
           render_ready(s)
-          handle:finish("Ready: local runs will resolve reference → editorial → community → statement.")
+          handle:finish("Ready")
           discover_providers(s)
           augment_oracles(s, provider, lang, function()
             vim.schedule(function()
-              if session_alive(s) and s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
-                render_ready(s)
-              end
+              if session_alive(s) then prepare_oracle(s) end
             end)
           end)
         end)
