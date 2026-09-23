@@ -131,6 +131,7 @@ the roadmap for the full set).
 
 - Windows Sandboxing support for local solution oracle
 - Sorting and filtering in the problem list view
+- Fetch LintCode beat by % metric and render memory usage in human readable text
 - More languages (i.e. Rust)
 - Notes per problem, kept beside the solution file
 - A solved/attempted filter in the finder, driven by the shared history
