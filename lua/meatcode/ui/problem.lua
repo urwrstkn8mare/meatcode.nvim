@@ -1516,7 +1516,22 @@ function M.open(problem, opts)
           return
         end
         local available = meta.availableLanguages or {}
-        if #available > 0 and not vim.tbl_contains(available, lang) then
+        if #available == 0 then
+          -- A successful, non-paid-only fetch always reports the languages
+          -- it actually supports (see api/init.lua's paid_only note); zero
+          -- here means this candidate provably cannot serve `lang` at all,
+          -- not "unknown" -- silently keeping `lang` would write a starter
+          -- file the judge can't build. Try the next candidate instead.
+          opening[key] = nil
+          handle:cancel()
+          local label = providers.get(provider).label
+          if forced then
+            return util.err(problem.name .. " has no available languages on " .. label)
+          end
+          opening[key] = true
+          return start_next("no available languages on " .. label)
+        end
+        if not vim.tbl_contains(available, lang) then
           util.notify(string.format("%s is unavailable; falling back to %s",
             lang_info.name(lang), lang_info.name(available[1])))
           lang = available[1]
