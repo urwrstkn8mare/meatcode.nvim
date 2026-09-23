@@ -1,4 +1,5 @@
 local catalog = require("meatcode.catalog")
+local availability = require("meatcode.catalog.availability")
 local config = require("meatcode.config")
 local hl = require("meatcode.ui.highlight")
 local lang_info = require("meatcode.lang")
@@ -269,6 +270,15 @@ function M.setup(opts)
 
   util.mkdirp(config.options.cache_dir)
   util.mkdirp(config.options.solutions_dir)
+  -- Prime the same availability cache list-hover checks populate, but do it
+  -- serially in the background as soon as a cached/fresh merged catalog exists.
+  vim.schedule(function()
+    local cached = problem_catalog.load()
+    if cached then availability.warm(cached.problems) end
+    problem_catalog.ensure(function(_, fresh)
+      if fresh then availability.warm(fresh.problems) end
+    end)
+  end)
   return M
 end
 

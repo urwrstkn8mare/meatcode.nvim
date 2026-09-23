@@ -11,7 +11,7 @@ local util = require("meatcode.util")
 --- every candidate supports.
 local M = {}
 
-local state = { data = nil, pending = {} }
+local state = { data = nil, pending = {}, warmer = nil }
 
 local function path()
   return config.options.cache_dir .. "/language-availability.json"
@@ -181,6 +181,60 @@ function M.check(problem, cb)
         end
         step()
       end)
+    end)
+  end
+  step()
+end
+
+-- One catalog probe at a time keeps this background sweep below the request
+-- cadence of the providers' own paginated catalog syncs, while still letting
+-- an interactive hover coalesce with the same `check` if the user reaches it.
+local BACKGROUND_DELAY_MS = 500
+
+--- Warm the persisted availability cache for every currently unknown problem.
+--- A sweep is deliberately serial: each `check` may itself follow multiple
+--- content-chain providers, so parallelising catalog-wide work would turn one
+--- background task into a request burst. Calling this again while a sweep is
+--- running merges new catalog entries into the same queue.
+---@param problems table[]
+function M.warm(problems)
+  local warm = state.warmer
+  if not warm then
+    warm = { queue = {}, seen = {}, checked = 0, failures = 0, running = false }
+    state.warmer = warm
+  end
+
+  for _, problem in ipairs(problems or {}) do
+    local key = providers.problem_key(problem)
+    if key and not warm.seen[key] and not M.known(problem) then
+      warm.seen[key] = true
+      table.insert(warm.queue, problem)
+    end
+  end
+  if warm.running or #warm.queue == 0 then return end
+
+  warm.running = true
+  warm.handle = util.progress("Checking catalog language support…")
+  local function step()
+    local problem = table.remove(warm.queue, 1)
+    if not problem then
+      warm.running = false
+      local message = string.format("Catalog language support checked for %d problem%s",
+        warm.checked, warm.checked == 1 and "" or "s")
+      if warm.failures > 0 then
+        message = message .. string.format(" · %d couldn't be checked", warm.failures)
+      end
+      warm.handle:finish(message)
+      state.warmer = nil
+      return
+    end
+
+    warm.checked = warm.checked + 1
+    warm.handle:report(string.format("Checking catalog language support %d/%d: %s",
+      warm.checked, warm.checked + #warm.queue, problem.name))
+    M.check(problem, function(_, _, err)
+      if err then warm.failures = warm.failures + 1 end
+      vim.defer_fn(step, BACKGROUND_DELAY_MS)
     end)
   end
   step()
