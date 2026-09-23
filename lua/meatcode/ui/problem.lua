@@ -502,11 +502,15 @@ function M.run()
   results.running(s.res_buf, "Running " .. #cases .. " local test case" .. (#cases == 1 and "" or "s"))
 
   runner.run(providers.filename(s.problem), current_code(s), s.lang, s.meta, cases, function(result)
-    s.busy = false
     s.last_oracle = {
       stage = result.oracle_stage, provider = result.oracle_provider, id = result.oracle_id,
     }
     vim.schedule(function()
+      -- Only cleared once the render actually lands: clearing it back in the
+      -- runner callback (before this scheduled tail runs) would let a
+      -- keypress in between start a second `runner.run` against the same
+      -- on-disk workdir while this one is still finishing.
+      s.busy = false
       if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
         results.render_run(s.res_buf, result)
       end
@@ -578,10 +582,19 @@ function M.submit()
   results.running(s.res_buf, "Submitting to " .. backend.label)
 
   backend.submit(s.problem, s.meta, current_code(s), s.lang, function(err, data)
-    s.busy = false
     vim.schedule(function()
-      if not (s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf)) then return end
+      -- `s.busy` is cleared per-branch below, not eagerly here: a submit
+      -- that turns out not accepted may chain straight into
+      -- `revalidate_community`, which starts another async job and expects
+      -- to own `s.busy` until *it* finishes. Clearing it up front would let
+      -- a keypress land between this job completing and that chained one
+      -- starting, running two runner jobs against the same workdir at once.
+      if not (s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf)) then
+        s.busy = false
+        return
+      end
       if err then
+        s.busy = false
         return results.render_run(s.res_buf, {
           ok = false, error = err, cases = {}, passed = 0, total = 0,
         })
@@ -597,9 +610,10 @@ function M.submit()
       end
       results.render_submit(s.res_buf, submission)
       if submission.accepted then
+        s.busy = false
         accepted(s)
-      else
-        revalidate_community(s, submission)
+      elseif not revalidate_community(s, submission) then
+        s.busy = false
       end
     end)
   end)

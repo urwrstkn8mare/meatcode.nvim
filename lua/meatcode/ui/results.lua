@@ -30,9 +30,19 @@ local function push(lines, spans, text, group)
   end
 end
 
+--- True for a real, non-empty display value. `vim.json.decode` turns a
+--- JSON `null` into the `vim.NIL` sentinel, which is truthy in Lua and
+--- indistinguishable from a real value unless checked explicitly here;
+--- provider adapters don't uniformly filter it out of passthrough fields
+--- (compile/runtime errors, failing input/expected/actual/stdout), so this
+--- is the one place all of that external data funnels through display.
+local function has_text(value)
+  return value ~= nil and value ~= vim.NIL and value ~= ""
+end
+
 --- Indent a possibly multi-line blob for display.
 local function block(lines, spans, label, value, group)
-  if not value or value == "" then
+  if not has_text(value) then
     return
   end
   for i, l in ipairs(vim.split(value:gsub("%s+$", ""), "\n", { plain = true })) do
@@ -136,22 +146,22 @@ function M.render_submit(buf, data)
     accepted and "MeatCodePass" or "MeatCodeFail")
   push(lines, spans, "")
 
-  if data.runtime then
+  if has_text(data.runtime) then
     local beats = data.runtime_percentile
       and string.format("  (Beats %.1f%%)", data.runtime_percentile) or ""
     push(lines, spans, string.format("      runtime   %s%s", tostring(data.runtime), beats), "MeatCodeMuted")
   end
-  if data.memory then
+  if has_text(data.memory) then
     local beats = data.memory_percentile
       and string.format("  (Beats %.1f%%)", data.memory_percentile) or ""
     push(lines, spans, string.format("      memory    %s%s", tostring(data.memory), beats), "MeatCodeMuted")
   end
 
-  if data.compile_output and data.compile_output ~= "" then
+  if has_text(data.compile_output) then
     push(lines, spans, "")
     block(lines, spans, "compile", data.compile_output, "MeatCodeFail")
   end
-  if data.runtime_error and data.runtime_error ~= "" then
+  if has_text(data.runtime_error) then
     push(lines, spans, "")
     block(lines, spans, "runtime", data.runtime_error, "MeatCodeFail")
   end

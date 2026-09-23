@@ -249,6 +249,10 @@ end
 function M.setup(opts)
   config.setup(opts)
   hl.setup()
+  -- Only user of math.random (M.random's problem pick); unseeded Lua RNG is
+  -- deterministic, so the first pick after every Neovim start would
+  -- otherwise always land on the same problem for a given catalog order.
+  math.randomseed(vim.uv.hrtime())
 
   vim.api.nvim_create_autocmd("ColorScheme", {
     group = vim.api.nvim_create_augroup("MeatCodeHighlights", { clear = true }),

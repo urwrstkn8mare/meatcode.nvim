@@ -17,6 +17,7 @@ local TOKEN_URL = "https://securetoken.googleapis.com/v1/token?key=" .. FIREBASE
 local EXPIRY_SKEW = 60
 
 local state = { id_token = nil, expires_at = 0, refresh_token = nil, loaded = false }
+local refreshing = nil -- queued callbacks while a refresh is in flight
 
 local function auth_path()
   return config.options.cache_dir .. "/auth.json"
@@ -94,6 +95,16 @@ function M.id_token(cb)
     return cb(nil, state.id_token)
   end
 
+  -- Several callers (e.g. discover_providers and augment_oracles firing off
+  -- several NeetCode requests back-to-back) can all observe an expired token
+  -- at once; share one in-flight refresh instead of each POSTing to
+  -- TOKEN_URL and racing to overwrite `state.id_token`.
+  if refreshing then
+    table.insert(refreshing, cb)
+    return
+  end
+  refreshing = { cb }
+
   local body = table.concat({
     "grant_type=refresh_token",
     "refresh_token=" .. vim.uri_encode(state.refresh_token, "rfc2396"),
@@ -105,13 +116,19 @@ function M.id_token(cb)
     body = body,
     headers = { ["Content-Type"] = "application/x-www-form-urlencoded" },
   }, function(err, res)
+    local waiting = refreshing
+    refreshing = nil
+    local function finish(finish_err, token)
+      for _, waiter in ipairs(waiting) do waiter(finish_err, token) end
+    end
+
     if err then
-      return cb(err, nil)
+      return finish(err, nil)
     end
 
     local ok, decoded = pcall(vim.json.decode, res.body)
     if not ok or type(decoded) ~= "table" then
-      return cb("could not decode token response", nil)
+      return finish("could not decode token response", nil)
     end
 
     if decoded.error then
@@ -119,13 +136,13 @@ function M.id_token(cb)
       if msg == "TOKEN_EXPIRED" or msg == "INVALID_REFRESH_TOKEN" or msg == "USER_DISABLED" then
         msg = msg .. " — your saved token is no longer valid, run :MeatCode login again"
       end
-      return cb(msg, nil)
+      return finish(msg, nil)
     end
 
     state.id_token = decoded.id_token
     state.expires_at = os.time() + (tonumber(decoded.expires_in) or 3600)
     persist()
-    cb(nil, state.id_token)
+    finish(nil, state.id_token)
   end)
 end
 

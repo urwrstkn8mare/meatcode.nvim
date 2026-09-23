@@ -207,6 +207,19 @@ local function fail(cb, msg, unsupported)
   cb(summarize({ ok = false, error = msg, cases = {}, unsupported = unsupported }))
 end
 
+--- Read a bundled harness file (python.py, cpp_runtime.h, cpp_stdlib.h).
+--- A nil here means a broken/partial install (e.g. a sparse checkout that
+--- dropped `runner/harness/`), not a normal failure mode; surface it as a
+--- clear error instead of letting `util.write_file` crash on a nil body.
+local function read_harness(cb, name)
+  local content = util.read_file(harness_dir() .. "/" .. name)
+  if not content then
+    fail(cb, "missing runner harness file '" .. name .. "' -- reinstall meatcode.nvim")
+    return nil
+  end
+  return content
+end
+
 --- Decode a harness report, tolerating trailing noise on stdout.
 local function decode_report(stdout)
   local line = nil
@@ -491,10 +504,12 @@ local function run_python(problem_id, code, meta, cases, cb, oracle)
   if not ref or ref == "" then
     return fail(cb, "no Python starter code to derive the signature from", true)
   end
+  local harness = read_harness(cb, "python.py")
+  if not harness then return end
 
   util.write_file(dir .. "/user.py", code)
   util.write_file(dir .. "/ref.py", ref)
-  util.write_file(dir .. "/harness.py", util.read_file(harness_dir() .. "/python.py"))
+  util.write_file(dir .. "/harness.py", harness)
   util.write_json(dir .. "/cases.json", cases)
   util.write_file(dir .. "/types.json", declared_types(meta))
   util.write_file(dir .. "/expected.json", expected_json(problem_id, meta, cases))
@@ -528,9 +543,12 @@ local function run_python_class(problem_id, code, meta, cases, cb, mode, oracle)
     util.write_file(dir .. "/ops.json", encoded)
   end
 
+  local harness = read_harness(cb, "python.py")
+  if not harness then return end
+
   util.write_file(dir .. "/user.py", code)
   util.write_file(dir .. "/ref.py", ref)
-  util.write_file(dir .. "/harness.py", util.read_file(harness_dir() .. "/python.py"))
+  util.write_file(dir .. "/harness.py", harness)
   util.write_json(dir .. "/cases.json", cases)
   util.write_file(dir .. "/types.json", declared_types(meta))
   util.write_file(dir .. "/expected.json", expected_json(problem_id, meta, cases))
@@ -572,6 +590,10 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle)
   if not main_src then
     return fail(cb, gen_err, true)
   end
+  local runtime = read_harness(cb, "cpp_runtime.h")
+  if not runtime then return end
+  local stdlib = read_harness(cb, "cpp_stdlib.h")
+  if not stdlib then return end
 
   util.write_file(dir .. "/user.cpp", strip_includes(code))
   util.write_file(dir .. "/ref.cpp", ref and strip_includes(ref) or "")
@@ -579,9 +601,7 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle)
   util.write_json(dir .. "/cases.json", cases)
   util.write_file(dir .. "/expected.json", expected_json(problem_id, meta, cases))
 
-  local runtime = util.read_file(harness_dir() .. "/cpp_runtime.h")
   util.write_file(dir .. "/cpp_runtime.h", runtime)
-  local stdlib = util.read_file(harness_dir() .. "/cpp_stdlib.h")
   util.write_file(dir .. "/cpp_stdlib.h", stdlib)
 
   local bin = dir .. "/run"
