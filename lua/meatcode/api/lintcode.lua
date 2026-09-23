@@ -20,6 +20,12 @@ local LINTCODE_TO_LANG = {
   python2 = "python",
   python3 = "python",
   cpp = "cpp",
+  -- LintCode reports this identically to this plugin's own key (`java`
+  -- rather than a mapped alias, unlike python2/python3 above). Missing this
+  -- entry silently emptied `availableLanguages` for Java-only problems, so
+  -- the language-mismatch guard in ui/problem.lua never fired and a cpp
+  -- starter got written for a problem that only supports Java.
+  java = "java",
 }
 
 local function decode(name, cb)
