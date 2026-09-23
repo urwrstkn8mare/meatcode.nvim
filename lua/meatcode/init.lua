@@ -197,17 +197,19 @@ function M.random()
     end
     local unsolved, all = {}, {}
     for _, problem in ipairs(cat.problems) do
-      local accessible = false
-      for _, name in ipairs(providers.NAMES) do
-        local record = problem.providers[name]
-        if record and (not record.paid or providers.paid_unlocked(name)) then
-          accessible = true
-          break
+      if not availability.is_unsupported(problem, config.options.lang) then
+        local accessible = false
+        for _, name in ipairs(providers.NAMES) do
+          local record = problem.providers[name]
+          if record and (not record.paid or providers.paid_unlocked(name)) then
+            accessible = true
+            break
+          end
         end
-      end
-      if accessible then
-        table.insert(all, problem)
-        if not progress.is_solved(problem) then table.insert(unsolved, problem) end
+        if accessible then
+          table.insert(all, problem)
+          if not progress.is_solved(problem) then table.insert(unsolved, problem) end
+        end
       end
     end
     local choices = #unsolved > 0 and unsolved or all
