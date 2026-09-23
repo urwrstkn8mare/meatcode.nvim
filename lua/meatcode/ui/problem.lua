@@ -419,6 +419,50 @@ local function clear_images(s)
   end
 end
 
+--- Whether the user is extending a Visual or Select mode selection.
+local function selecting()
+  local mode = vim.api.nvim_get_mode().mode:sub(1, 1)
+  return mode == "v" or mode == "V" or mode == "\22"
+    or mode == "s" or mode == "S" or mode == "\19"
+end
+
+--- A diagram render skipped because it arrived mid-selection.
+local render_held = false
+
+--- image.nvim checks folds by hopping into the image's window with
+--- `nvim_set_current_win`, and Neovim ends Visual/Select mode whenever the
+--- cursor lands in a window showing another buffer. It re-renders every image
+--- on any `WinResized`/`WinNew` -- a notification float changing size is
+--- enough -- so each hop wiped the selection being made in the code pane. Our
+--- diagrams sit those renders out and catch up once the selection ends.
+local function keep_selections(img)
+  local render = img.render
+  img.render = function(self, ...)
+    if selecting() then
+      render_held = true
+      return
+    end
+    return render(self, ...)
+  end
+end
+
+vim.api.nvim_create_autocmd("ModeChanged", {
+  group = vim.api.nvim_create_augroup("MeatCodeDiagramSelection", { clear = true }),
+  callback = function()
+    if not render_held or selecting() then
+      return
+    end
+    render_held = false
+    for _, s in pairs(sessions) do
+      for _, img in ipairs(s.drawn or {}) do
+        pcall(function()
+          img:render()
+        end)
+      end
+    end
+  end,
+})
+
 --- Draw the statement's diagrams inline. image.nvim reserves the rows itself
 --- through `with_virtual_padding`, so the surrounding text is never covered.
 --- Anything missing here -- the plugin, a capable terminal, ImageMagick --
@@ -457,6 +501,7 @@ local function render_images(s)
           end)
           return
         end
+        keep_selections(img)
         table.insert(s.drawn, img)
         pcall(function()
           img:render()
