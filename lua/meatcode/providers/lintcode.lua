@@ -1,4 +1,5 @@
 local api = require("meatcode.api.lintcode")
+local examples = require("meatcode.api.examples")
 local auth = require("meatcode.api.lintcode_auth")
 
 local M = {
@@ -37,6 +38,15 @@ function M.submit(problem, meta, code, lang, cb)
   api.submit(id(problem), code, lang, cb)
 end
 
+--- LintCode wraps failing-case fields (`input`/`expected`/`output`) in literal
+--- `<pre><code>…</code></pre>` markup and HTML entities meant for its own web
+--- UI; render them as plain text instead.
+local function clean(value)
+  if type(value) ~= "string" then return value end
+  local text = examples.unescape((value:gsub("<[^>]->", "")))
+  return text:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
 function M.normalize_submission(data)
   local function field(snake, camel)
     local value = data[snake]
@@ -56,10 +66,10 @@ function M.normalize_submission(data)
     memory = field("memory_cost", "memoryCost") and tostring(field("memory_cost", "memoryCost")) or nil,
     compile_output = field("compile_info", "compileInfo"),
     runtime_error = field("error_message", "errorMessage"),
-    input = data.input,
-    expected = data.expected,
-    actual = data.output,
-    stdout = data.stdout,
+    input = clean(data.input),
+    expected = clean(data.expected),
+    actual = clean(data.output),
+    stdout = clean(data.stdout),
     failed_input = accepted and nil or data.input,
   }
 end
