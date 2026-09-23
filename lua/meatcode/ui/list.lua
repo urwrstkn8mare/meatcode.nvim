@@ -403,6 +403,7 @@ function M.open(query)
     state.subscribed = true
     catalog.on_update(function() vim.schedule(refresh) end)
     progress.on_update(function() vim.schedule(refresh) end)
+    availability.on_update(function() vim.schedule(refresh) end)
   end
 end
 

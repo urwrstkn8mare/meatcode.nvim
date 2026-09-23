@@ -11,7 +11,7 @@ local util = require("meatcode.util")
 --- every candidate supports.
 local M = {}
 
-local state = { data = nil, pending = {}, warmer = nil }
+local state = { data = nil, pending = {}, warmer = nil, listeners = {} }
 
 local function path()
   return config.options.cache_dir .. "/language-availability.json"
@@ -28,6 +28,14 @@ local function persist()
   util.write_json(path(), state.data or {})
 end
 
+local function store(problem, entry)
+  local key = providers.problem_key(problem)
+  if not key then return end
+  load()[key] = entry
+  persist()
+  for _, listener in ipairs(state.listeners) do pcall(listener, problem) end
+end
+
 --- The full set of languages known to be servable for `problem`, or nil if
 --- it has never been probed.
 function M.known(problem)
@@ -35,6 +43,12 @@ function M.known(problem)
   if not key then return nil end
   local entry = load()[key]
   return entry and entry.languages or nil
+end
+
+--- Subscribe to determined availability cache updates.
+---@param fn fun(problem: table)
+function M.on_update(fn)
+  table.insert(state.listeners, fn)
 end
 
 --- Whether `problem` has been probed and confirmed to not support `lang` on
@@ -115,8 +129,7 @@ function M.check(problem, cb)
 
   local candidates = providers.candidates(problem, "content")
   if #candidates == 0 then
-    load()[key] = { languages = {}, locked = true, checked_at = os.time() }
-    persist()
+    store(problem, { languages = {}, locked = true, checked_at = os.time() })
     return finish({}, true, nil)
   end
 
@@ -141,14 +154,12 @@ function M.check(problem, cb)
     local name = candidates[i]
     if not name then
       if any_success then
-        load()[key] = { languages = languages, checked_at = os.time() }
-        persist()
+        store(problem, { languages = languages, checked_at = os.time() })
         return finish(languages, false, nil)
       end
       local locked = attempted and all_walled
       if locked then
-        load()[key] = { languages = {}, locked = true, checked_at = os.time() }
-        persist()
+        store(problem, { languages = {}, locked = true, checked_at = os.time() })
         return finish({}, true, nil)
       end
       local err = #errors > 0 and table.concat(errors, "; ")
