@@ -31,7 +31,15 @@ local defaults = {
 		-- Test cases run in separate processes. 0 uses the smaller of case count
 		-- and available CPU count; 1 forces sequential execution.
 		parallelism = 0,
-		python = { cmd = { "python3" } },
+		python = {
+			cmd = { "python3" },
+			-- Prepend a `from typing import *` and any helper types (ListNode,
+			-- TreeNode, a problem-specific Node/Interval, ...) a starter
+			-- references but never defines, because the judge supplies them
+			-- implicitly. Stripped back out before every local run and
+			-- submission -- see lua/meatcode/runner/python_prelude.lua.
+			auto_imports = true,
+		},
 		cpp = {
 			-- {source} and {out} are substituted at build time. Keep debug symbols
 			-- and disable optimisation so an LLDB rerun can show source backtraces.

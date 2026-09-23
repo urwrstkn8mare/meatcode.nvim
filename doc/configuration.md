@@ -34,7 +34,13 @@ require("meatcode").setup({
     -- Independent cases use separate processes. 0 = auto (up to CPU count),
     -- 1 = sequential, N = at most N concurrent workers.
     parallelism = 0,
-    python = { cmd = { "python3" } },
+    python = {
+      cmd = { "python3" },
+      -- Prepend imports/types (Optional, ListNode, ...) a starter needs but
+      -- never defines, so a language server stops flagging a valid
+      -- solution. Stripped back out before every run/submit. doc/python.md.
+      auto_imports = true,
+    },
     cpp = {
       -- {source} and {out} are substituted at build time. Debug symbols and
       -- -O0 are what let an LLDB rerun show a source backtrace on a crash.

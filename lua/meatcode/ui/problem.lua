@@ -6,6 +6,7 @@ local hl = require("meatcode.ui.highlight")
 local lang_info = require("meatcode.lang")
 local pages = require("meatcode.ui.pages")
 local progress = require("meatcode.progress")
+local python_prelude = require("meatcode.runner.python_prelude")
 local results = require("meatcode.ui.results")
 local runner = require("meatcode.runner")
 local tabs = require("meatcode.ui.tab")
@@ -313,8 +314,23 @@ local function render_ready(s)
   hl.apply(s.res_buf, spans)
 end
 
+--- `code` with the Python auto-import block prepended, when the language is
+--- Python and `runner.python.auto_imports` is on; unchanged otherwise.
+local function python_seed(lang, code)
+  if lang == "python" and config.options.runner.python.auto_imports then
+    return python_prelude.seed(code)
+  end
+  return code
+end
+
+--- The buffer's text, exactly as a run or submission should see it. Python
+--- solutions get their editor-only auto-import block (see
+--- `runner.python_prelude`) stripped back out here -- the one place every
+--- local run and every cloud submission both flow through.
 local function current_code(s)
-  return table.concat(vim.api.nvim_buf_get_lines(s.code_buf, 0, -1, false), "\n")
+  local code = table.concat(vim.api.nvim_buf_get_lines(s.code_buf, 0, -1, false), "\n")
+  if s.lang == "python" then code = python_prelude.strip(code) end
+  return code
 end
 
 local function save(s)
@@ -654,6 +670,7 @@ function M.reset()
   if s.busy then return util.notify("already running") end
 
   local starter = (s.meta.starterCode or {})[s.lang] or ""
+  starter = python_seed(s.lang, starter)
   local local_err = reset_local(s, starter)
   if local_err then return util.err(local_err) end
   s.failed_input = nil
@@ -1249,7 +1266,7 @@ local function seed_file(s, path, cb)
   if s.lang == "cpp" then ensure_clangd(util.slug(providers.filename(s.problem)), starter) end
   if vim.uv.fs_stat(path) then return cb() end
 
-  util.write_file(path, starter)
+  util.write_file(path, python_seed(s.lang, starter))
 
   local backend = providers.get(s.content_provider)
   if backend.saved_code then
@@ -1264,9 +1281,10 @@ local function seed_file(s, path, cb)
           and (data.lang == nil or data.lang == s.lang)
           and code_tabs[1].code or nil
         if not (code and code ~= "" and code ~= starter) then return end
-        vim.api.nvim_buf_set_lines(s.code_buf, 0, -1, false, vim.split(code, "\n", { plain = true }))
+        local write_code = python_seed(s.lang, code)
+        vim.api.nvim_buf_set_lines(s.code_buf, 0, -1, false, vim.split(write_code, "\n", { plain = true }))
         vim.bo[s.code_buf].modified = false
-        util.write_file(path, code)
+        util.write_file(path, write_code)
       end)
     end)
   end

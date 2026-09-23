@@ -115,6 +115,7 @@ the roadmap for the full set).
 - [Configuration](doc/configuration.md) — every option and highlight group
 - [Local test runs](doc/local-runs.md) — coverage, editing cases, crash output
 - [C++ and clangd](doc/cpp.md) — the generated headers and `.clangd`
+- [Python and your language server](doc/python.md) — the auto-import block
 - [Progress tracking](doc/progress.md) — how completions and streaks count
 - Provider APIs — [NeetCode](doc/api/neetcode.md),
   [LeetCode](doc/api/leetcode.md), [LintCode](doc/api/lintcode.md)

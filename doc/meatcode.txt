@@ -213,7 +213,7 @@ Defaults: >lua
       runner = {
         sandbox = true,
         parallelism = 0,
-        python = { cmd = { "python3" } },
+        python = { cmd = { "python3" }, auto_imports = true },
         cpp = {
           cmd = { "c++", "-std=c++23", "-g", "-O0", "-o", "{out}", "{source}" },
           clangd = true,
@@ -248,6 +248,14 @@ taken from the definition NeetCode leaves in its starter comment. The judge
 supplies all of this implicitly, so without it a language server reports errors
 on valid solutions. Your solution file is left exactly as NeetCode wrote it;
 nothing is inserted into it.
+
+`runner.python.auto_imports` prepends a `from typing import *` and any helper
+types (`ListNode`, `TreeNode`, a problem-specific `Node`/`Interval`, ...) a
+starter references but never defines, for the same reason: the judge supplies
+them implicitly. Pyright/pylsp have no force-include equivalent, so the block
+is inserted into the real file and stripped back out before every local run
+and submission — see doc/python.md. `<leader>nR` (reset)
+re-derives and re-inserts it.
 
 Helper types are deliberately per problem rather than shared: `Node` is an
 adjacency list in Clone Graph and a random pointer in Copy List with Random
