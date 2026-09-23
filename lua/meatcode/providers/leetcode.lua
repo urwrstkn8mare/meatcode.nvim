@@ -40,8 +40,25 @@ function M.enrich(problem, lang, meta, cb, status)
   end)
 end
 
+--- The submit endpoint keys on LeetCode's internal `questionId`, which only
+--- LeetCode-sourced data carries: NeetCode roadmap records and metadata have
+--- none, and LintCode metadata's `question_id` is LintCode's own id.
+local function known_question_id(problem, meta)
+  if meta.provider == "leetcode" and meta.question_id then return meta.question_id end
+  local question_id = problem.providers.leetcode.question_id
+  if question_id and question_id ~= "" then return question_id end
+end
+
 function M.submit(problem, meta, code, lang, cb)
-  api.submit(id(problem), meta.question_id, code, lang, cb)
+  local slug = id(problem)
+  local question_id = known_question_id(problem, meta)
+  if question_id then return api.submit(slug, question_id, code, lang, cb) end
+  api.question_id(slug, function(err, resolved)
+    if err then return cb(err, nil) end
+    -- The session owns this problem copy; a resubmit skips the lookup.
+    problem.providers.leetcode.question_id = resolved
+    api.submit(slug, resolved, code, lang, cb)
+  end)
 end
 
 function M.normalize_submission(data)

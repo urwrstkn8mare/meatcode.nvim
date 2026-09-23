@@ -115,7 +115,8 @@ Problem finder ~
 
 Solving ~
   <leader>nr            Run visible cases locally when available
-  <leader>ns            Submit through the submit chain's judge
+  <leader>ns            Submit through the submit chain's judge; the verdict
+                        names the provider that judged it
   <leader>nR            Reset to the content provider's starter code
   <leader>no            Fuzzy-pick a provider/solution/video link
   <leader>nc            Reorder the content/submit fallback chains. The

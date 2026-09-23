@@ -79,6 +79,12 @@ query questionData($titleSlug: String!) {
 }
 ]]
 
+local QUESTION_ID_QUERY = [[
+query questionId($titleSlug: String!) {
+  question(titleSlug: $titleSlug) { questionId }
+}
+]]
+
 local STREAK_QUERY = [[
 query getStreakCounter {
   streakCounter {
@@ -148,12 +154,17 @@ local function decode_response(name, cb)
     end
     local ok, decoded = pcall(vim.json.decode, res.body or "")
     if not ok or type(decoded) ~= "table" then
-      return cb(string.format("%s: bad JSON (HTTP %s)", name, tostring(res.status)), nil)
+      decoded = nil
     end
+    -- An error status is the failure to report even when its body (e.g. an
+    -- HTML 500 page) is not JSON.
     if res.status < 200 or res.status >= 300 then
-      local msg = decoded.error or (decoded.errors and decoded.errors[1] and decoded.errors[1].message)
+      local msg = decoded and (decoded.error or (decoded.errors and decoded.errors[1] and decoded.errors[1].message))
       return cb(string.format("%s: HTTP %d%s", name, res.status,
         msg and (" — " .. tostring(msg)) or ""), nil)
+    end
+    if not decoded then
+      return cb(string.format("%s: bad JSON (HTTP %s)", name, tostring(res.status)), nil)
     end
     if decoded.errors and decoded.errors[1] then
       return cb(name .. ": " .. tostring(decoded.errors[1].message), nil)
@@ -358,6 +369,22 @@ function M.problem(slug, cb)
       topics = topics,
       meta_data = meta_data,
     })
+  end)
+end
+
+--- The internal `questionId` the submit endpoint keys on (not the number shown
+--- on the site), for callers that only hold the slug.
+function M.question_id(slug, cb)
+  graphql("question id", QUESTION_ID_QUERY, { titleSlug = slug }, function(err, data)
+    if err then
+      return cb(err, nil)
+    end
+    local q = data and data.question
+    local id = type(q) == "table" and q.questionId
+    if (type(id) ~= "string" and type(id) ~= "number") or id == "" then
+      return cb("unknown LeetCode problem: " .. slug, nil)
+    end
+    cb(nil, tostring(id))
   end)
 end
 

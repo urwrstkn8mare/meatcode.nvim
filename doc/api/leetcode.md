@@ -154,6 +154,13 @@ Referer: https://leetcode.com/problems/<slug>/
 -> {"submission_id": 123456789}
 ```
 
+`question_id` must be LeetCode's own internal id. LeetCode metadata and the
+merged catalog carry it; a NeetCode roadmap record, NeetCode metadata or
+LintCode metadata (whose `question_id` is LintCode's own) do not. When neither
+LeetCode source is at hand, the adapter first resolves it by slug with
+`question(titleSlug) { questionId }` and keeps it for the session. A missing
+id sent as the string `"nil"` got an HTML HTTP 500 back.
+
 Then poll until the judge finishes:
 
 ```jsonc

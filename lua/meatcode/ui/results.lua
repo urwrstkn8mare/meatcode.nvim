@@ -1,5 +1,6 @@
 local config = require("meatcode.config")
 local hl = require("meatcode.ui.highlight")
+local providers = require("meatcode.providers")
 local runner = require("meatcode.runner")
 
 --- Renders local run results and cloud submission verdicts into a panel buffer.
@@ -50,11 +51,15 @@ local function block(lines, spans, label, value, group)
   end
 end
 
-function M.running(buf, what)
+local function show(buf, lines, spans)
   vim.bo[buf].modifiable = true
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "", "  " .. what .. "…", "" })
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
-  hl.apply(buf, { { 1, 0, 40, "MeatCodeMuted" } })
+  hl.apply(buf, spans)
+end
+
+function M.running(buf, what)
+  show(buf, { "", "  " .. what .. "…", "" }, { { 1, 0, 40, "MeatCodeMuted" } })
 end
 
 --- Local run results (from the harness).
@@ -126,13 +131,11 @@ function M.render_run(buf, result)
     end
   end
 
-  vim.bo[buf].modifiable = true
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-  hl.apply(buf, spans)
+  show(buf, lines, spans)
 end
 
---- Normalized cloud submission verdict from any provider adapter.
+--- Normalized cloud submission verdict from any provider adapter, tagged with
+--- the `provider` name that judged it.
 function M.render_submit(buf, data)
   local lines, spans = {}, {}
   push(lines, spans, "")
@@ -142,7 +145,8 @@ function M.render_submit(buf, data)
   local passed = tonumber(data.passed) or 0
   local total = tonumber(data.total) or 0
   push(lines, spans,
-    string.format("  %s  %s — %d/%d test cases", accepted and "✓" or "✗", status, passed, total),
+    string.format("  %s  %s on %s — %d/%d test cases", accepted and "✓" or "✗", status,
+      providers.get(data.provider).label, passed, total),
     accepted and "MeatCodePass" or "MeatCodeFail")
   push(lines, spans, "")
 
@@ -193,10 +197,19 @@ function M.render_submit(buf, data)
       "MeatCodeMuted")
   end
 
-  vim.bo[buf].modifiable = true
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
-  hl.apply(buf, spans)
+  show(buf, lines, spans)
+end
+
+--- A submission that ended without a verdict (auth, network or judge failure).
+function M.render_submit_error(buf, provider, err)
+  local lines, spans = {}, {}
+  push(lines, spans, "")
+  push(lines, spans, "  Submission to " .. providers.get(provider).label .. " failed", "MeatCodeFail")
+  push(lines, spans, "")
+  for _, l in ipairs(vim.split(err, "\n", { plain = true })) do
+    push(lines, spans, "    " .. l, "MeatCodeMuted")
+  end
+  show(buf, lines, spans)
 end
 
 return M

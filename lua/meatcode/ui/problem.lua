@@ -611,11 +611,10 @@ function M.submit()
       end
       if err then
         s.busy = false
-        return results.render_run(s.res_buf, {
-          ok = false, error = err, cases = {}, passed = 0, total = 0,
-        })
+        return results.render_submit_error(s.res_buf, backend.name, err)
       end
       local submission = backend.normalize_submission(data)
+      submission.provider = backend.name
       s.failed_input = type(submission.failed_input) == "string"
         and vim.trim(submission.failed_input) ~= "" and submission.failed_input or nil
       if s.failed_input and runner.learn(
