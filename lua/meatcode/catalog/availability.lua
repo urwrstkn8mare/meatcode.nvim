@@ -276,8 +276,11 @@ function M.warm(problems)
     end
 
     warm.checked = warm.checked + 1
-    warm.handle:report(string.format("Checking catalog language support %d/%d: %s",
-      warm.checked, warm.checked + #warm.queue, problem.name))
+    -- No problem name: text whose width changes every step resizes the
+    -- notification float every step, and image.nvim redraws every diagram on
+    -- each resize.
+    warm.handle:report(string.format("Checking catalog access & language support %d/%d",
+      warm.checked, warm.checked + #warm.queue))
     M.check(problem, function(_, locked, err)
       if err then
         warm.failures = warm.failures + 1
