@@ -46,6 +46,16 @@ function M.problem(problem_id, cb)
     data.schema = util.META_SCHEMA
     local available = data.availableLanguages
     data.paid_only = data.free == false and (type(available) ~= "table" or #available == 0)
+    -- `company_tags` maps company -> times asked; the other adapters hand
+    -- over a plain `companies` list, most-asked first here.
+    local tags = type(data.company_tags) == "table" and data.company_tags or {}
+    local companies = vim.tbl_keys(tags)
+    table.sort(companies, function(a, b)
+      local ca, cb_ = tonumber(tags[a]) or 0, tonumber(tags[b]) or 0
+      if ca ~= cb_ then return ca > cb_ end
+      return a < b
+    end)
+    data.companies = companies
     cb(nil, data)
   end)
 end

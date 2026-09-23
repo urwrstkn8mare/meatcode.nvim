@@ -1523,7 +1523,7 @@ function M.open(problem, opts)
           content_provider = provider,
           submit_provider = submit_chain[1] or provider,
           meta = meta,
-          sections = description.sections(meta.description),
+          sections = description.sections(meta, provider),
           lang = lang,
           path = solution_path(selected, lang),
           busy = false,

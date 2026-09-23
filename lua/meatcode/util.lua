@@ -3,7 +3,7 @@ local M = {}
 --- Bumped whenever a provider's problem metadata grows a field the runner
 --- depends on, so caches written by an older version are refetched instead of
 --- silently running without it.
-M.META_SCHEMA = 3
+M.META_SCHEMA = 4
 
 --- Lazily resolved so a plugin that merely has fidget.nvim on the runtimepath
 --- (but never calls `setup()`, or hasn't loaded it yet) is never force-loaded

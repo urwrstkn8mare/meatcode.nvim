@@ -1,11 +1,13 @@
 --- Renders a problem statement the way the website presents it.
 ---
---- The payload is markdown with HTML mixed in: `<details class="hint-accordion">`
---- blocks for topics/hints, `<code>` spans, `<br>` spacing, and LaTeX between
---- dollar signs. We fold the accordions, conceal the markup and translate the
---- maths into the characters a terminal can actually draw. Provider links live
---- in the <leader>no fuzzy picker, not here.
+--- Every provider's statement is first brought into one markdown dialect by
+--- `ui.statement`, so this renderer sees the same shapes whichever site served
+--- the problem: headings, prose, lists, example blocks, diagrams, folded hints.
+--- We conceal the markup and translate the maths into the characters a
+--- terminal can actually draw. Topics, companies and availability live in the
+--- footer; provider links live in the <leader>no fuzzy picker, not here.
 local providers = require("meatcode.providers")
+local statement = require("meatcode.ui.statement")
 
 local M = {}
 
@@ -57,11 +59,6 @@ end
 
 -- ------------------------------------------------------------------- text
 
-local ENTITIES = {
-  ["&lt;"] = "<", ["&gt;"] = ">", ["&amp;"] = "&", ["&quot;"] = '"',
-  ["&#39;"] = "'", ["&apos;"] = "'", ["&nbsp;"] = " ",
-}
-
 local SUPER = {
   ["0"] = "⁰", ["1"] = "¹", ["2"] = "²", ["3"] = "³", ["4"] = "⁴",
   ["5"] = "⁵", ["6"] = "⁶", ["7"] = "⁷", ["8"] = "⁸", ["9"] = "⁹", ["-"] = "⁻",
@@ -82,26 +79,6 @@ local function plain_gsub(s, from, to)
   return (s:gsub(from:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1"), (to:gsub("%%", "%%%%"))))
 end
 
---- Fold HTML down to the markdown subset we render.
-local function clean_html(s)
-  -- A tag's count lives in a nested span; keep it off the tag's name.
-  s = s:gsub("<span[^>]*>(.-)</span>", " %1")
-  s = s:gsub("<code>(.-)</code>", "`%1`")
-  s = s:gsub("<a[^>]*>(.-)</a>", "%1")
-  s = s:gsub("<strong>(.-)</strong>", "**%1**")
-  s = s:gsub("<b>(.-)</b>", "**%1**")
-  s = s:gsub("<em>(.-)</em>", "*%1*")
-  s = s:gsub('<img[^>]*src="([^"]*)"[^>]*>', "\n![](%1)\n")
-  s = s:gsub("<br%s*/?>", "\n")
-  s = s:gsub("</?p[^>]*>", "\n")
-  s = s:gsub("</?div[^>]*>", "\n")
-  s = s:gsub("<[^>]+>", "")
-  for entity, char in pairs(ENTITIES) do
-    s = plain_gsub(s, entity, char)
-  end
-  return s
-end
-
 --- Maths that a monospace grid can show: symbols, then digit superscripts.
 local function typeset(s)
   for _, pair in ipairs(MATH) do
@@ -113,50 +90,6 @@ local function typeset(s)
   s = s:gsub("%^{(%-?%d+)}", sup)
   s = s:gsub("%^(%-?%d+)", sup)
   return s
-end
-
--- --------------------------------------------------------------- sections
-
---- Split the raw statement into prose chunks and collapsible accordions.
-local function split_sections(raw)
-  local out, pos = {}, 1
-  while true do
-    local s, e, body = raw:find("<details[^>]*>(.-)</details>", pos)
-    if not s then
-      break
-    end
-    local before = raw:sub(pos, s - 1)
-    if vim.trim(before) ~= "" then
-      table.insert(out, { kind = "md", text = before })
-    end
-
-    local summary = vim.trim(clean_html(body:match("<summary>(.-)</summary>") or "Hint"))
-    local rest = body:gsub("<summary>.-</summary>", "", 1)
-
-    -- Accordions holding nothing but links (Topics, Company Tags) read better
-    -- as a single wrapped line of tags than as one link per line.
-    local tags = {}
-    for tag in rest:gmatch("<a[^>]*>(.-)</a>") do
-      tag = vim.trim(clean_html(tag))
-      -- Company tags carry a count; topic tags do not.
-      local name, count = tag:match("^(.-)%s+(%d+)$")
-      table.insert(tags, { name = name or tag, count = count })
-    end
-    local remainder = rest:gsub("<a[^>]*>.-</a>", ""):gsub("<[^>]+>", "")
-
-    local section = { kind = "fold", summary = summary, text = rest, open = false }
-    if #tags > 0 and vim.trim(remainder) == "" then
-      section.tags = tags
-    end
-    table.insert(out, section)
-    pos = e + 1
-  end
-
-  local tail = raw:sub(pos)
-  if vim.trim(tail) ~= "" then
-    table.insert(out, { kind = "md", text = tail })
-  end
-  return out
 end
 
 -- ---------------------------------------------------------------- inline
@@ -176,10 +109,20 @@ local function delimited(marks, row, line, pattern, dlen, group)
   end
 end
 
+local function blank(s)
+  return (" "):rep(#s)
+end
+
 local function inline(marks, row, line)
   delimited(marks, row, line, "%*%*[^%*]+%*%*", 2, "MeatCodeBold")
   delimited(marks, row, line, "`[^`]+`", 1, "MeatCodeInlineCode")
-  delimited(marks, row, line, "%$[^%$]+%$", 1, "MeatCodeMath")
+  -- LaTeX and `<code>` spans are the same thing written two ways; they look
+  -- alike so a statement does not betray which site it came from.
+  delimited(marks, row, line, "%$[^%$]+%$", 1, "MeatCodeInlineCode")
+  -- Emphasis is searched with bold, code and maths blanked out (same byte
+  -- offsets), so their asterisks are never taken for its delimiters.
+  local masked = line:gsub("%*%*[^%*]+%*%*", blank):gsub("`[^`]+`", blank):gsub("%$[^%$]+%$", blank)
+  delimited(marks, row, masked, "%*[^%*%s][^%*]-%*", 1, "MeatCodeItalic")
 end
 
 -- ---------------------------------------------------------------- blocks
@@ -187,16 +130,20 @@ end
 local INDENT = "  "
 
 --- Append one prose chunk to `lines`, recording highlight marks as we go.
+---@param text string markdown in the `ui.statement` dialect
 ---@param prefix string leading whitespace for every line of this chunk
 ---@param tight boolean|nil drop a leading gap, so a fold body sits under its header
 local function render_md(text, lines, marks, prefix, tight)
   prefix = prefix or INDENT
   local in_code, code_start = false, nil
   local pending, seen = false, false
+  -- What the last row drawn was: "text", "item", "heading", "image" or "code".
+  local last = nil
 
   --- Emit a deferred blank line. Runs of them collapse into one, and any that
-  --- would trail the chunk simply never get flushed.
-  local function gap()
+  --- would trail the chunk simply never get flushed. A list hangs directly off
+  --- the sentence that introduces it, and its items never spread apart.
+  local function gap(kind)
     if not pending then
       return
     end
@@ -205,6 +152,9 @@ local function render_md(text, lines, marks, prefix, tight)
       return
     end
     if tight and not seen then
+      return
+    end
+    if kind == "item" and (last == "text" or last == "item") then
       return
     end
     table.insert(lines, "")
@@ -220,17 +170,19 @@ local function render_md(text, lines, marks, prefix, tight)
       } })
     end
     in_code, code_start = false, nil
+    pending = true
   end
 
-  for _, raw_line in ipairs(vim.split(clean_html(text), "\n", { plain = true })) do
+  for _, raw_line in ipairs(vim.split(text, "\n", { plain = true })) do
     local line = raw_line:gsub("%s+$", "")
 
     if line:match("^%s*```") then
       if in_code then
         close_code()
       else
-        gap()
+        gap("code")
         in_code, code_start = true, #lines
+        last = "code"
       end
       goto continue
     end
@@ -250,15 +202,24 @@ local function render_md(text, lines, marks, prefix, tight)
 
     -- Images hang from this row. image.nvim (when it works) covers the label
     -- with the diagram via virtual padding; otherwise <CR> still opens it.
-    local alt, url = trimmed:match("^!%[(.-)%]%((.-)%)$")
+    local url = trimmed:match("^!%[.-%]%((.-)%)$")
     if url and url ~= "" then
-      gap()
-      local label = string.format("%s🖼  %s", prefix, alt ~= "" and alt or "open diagram")
+      gap("image")
+      local label = prefix .. "🖼  open diagram"
       table.insert(lines, label)
       table.insert(marks, { #lines - 1, 0, { end_col = #label, hl_group = "MeatCodeFold" } })
       images[#lines - 1] = url
       add_link(#lines - 1, 0, #(lines[#lines]) + 1, url)
-      seen, pending = true, true
+      seen, pending, last = true, true, "image"
+      goto continue
+    end
+
+    local heading = trimmed:match("^#+%s+(.*)$")
+    if heading then
+      gap("heading")
+      table.insert(lines, prefix .. heading:gsub("`", ""))
+      table.insert(marks, { #lines - 1, 0, { end_col = #lines[#lines], hl_group = "MeatCodeSection" } })
+      seen, pending, last = true, true, "heading"
       goto continue
     end
 
@@ -268,67 +229,32 @@ local function render_md(text, lines, marks, prefix, tight)
     -- Any image left inline keeps only its alt text.
     line = line:gsub("!%[([^%]]*)%]%([^%)]*%)", "%1")
 
-    local heading = line:match("^%*%*(.-):?%*%*$")
-    if line:match("^#+%s") then
-      heading = line:gsub("^#+%s*", "")
-    end
-
-    if heading then
-      gap()
-      table.insert(lines, prefix .. heading)
-      table.insert(marks, { #lines - 1, 0, { end_col = #lines[#lines], hl_group = "MeatCodeSection" } })
-      seen, pending = true, true
-    elseif line:match("^%-%-%-+$") then
-      pending = true
+    local number, numbered = line:match("^(%d+%.)%s+(.*)$")
+    local bullet = line:match("^[%*%-]%s+(.*)$")
+    local kind = (number or bullet) and "item" or "text"
+    gap(kind)
+    if number then
+      line = prefix .. number .. " " .. numbered
+    elseif bullet then
+      line = prefix .. "• " .. bullet
     else
-      gap()
-      local bullet, rest = line:match("^([%*%-])%s+(.*)$")
-      if bullet then
-        line = prefix .. "• " .. rest
-      else
-        line = prefix .. line
-      end
-      local text, spans = delink(line)
-      table.insert(lines, text)
-      local row = #lines - 1
-      inline(marks, row, text)
-      for _, span in ipairs(spans) do
-        table.insert(marks, { row, span.from, { end_col = span.to, hl_group = "MeatCodeLink" } })
-        add_link(row, span.from, span.to, span.url)
-      end
-      seen = true
+      line = prefix .. line
     end
+    local text, spans = delink(line)
+    table.insert(lines, text)
+    local row = #lines - 1
+    inline(marks, row, text)
+    for _, span in ipairs(spans) do
+      table.insert(marks, { row, span.from, { end_col = span.to, hl_group = "MeatCodeLink" } })
+      add_link(row, span.from, span.to, span.url)
+    end
+    seen, last = true, kind
 
     ::continue::
   end
 
   if in_code then
     close_code()
-  end
-end
-
---- A row of tags: names picked out, counts and separators held back.
-local function render_tags(tags, lines, marks)
-  local prefix = INDENT .. INDENT
-  local text, spans = prefix, {}
-  for i, tag in ipairs(tags) do
-    if i > 1 then
-      text = text .. "   ·   "
-    end
-    local from = #text
-    text = text .. tag.name
-    table.insert(spans, { from, #text, "MeatCodeTag" })
-    if tag.count then
-      text = text .. " " .. tag.count
-    end
-  end
-
-  table.insert(lines, text)
-  local row = #lines - 1
-  -- Everything is muted, then the names are lifted back out of it.
-  table.insert(marks, { row, 0, { end_col = #text, hl_group = "MeatCodeMuted" } })
-  for _, span in ipairs(spans) do
-    table.insert(marks, { row, span[1], { end_col = span[2], hl_group = "MeatCodeTag" } })
   end
 end
 
@@ -355,7 +281,10 @@ function M.render(buf, problem, meta, sections, opts)
   local completions = (opts or {}).completions or 0
   local status = string.format("%d completion%s", completions, completions == 1 and "" or "s")
   local sep = "   ·   "
-  local tail = string.format("%s%d hidden tests", sep, meta.test_case_count or 0)
+  -- Only NeetCode reports its hidden test count; "0 hidden tests" would be a
+  -- claim nobody made.
+  local hidden = tonumber(meta.test_case_count) or 0
+  local tail = hidden > 0 and string.format("%s%d hidden tests", sep, hidden) or ""
 
   table.insert(lines, badge .. sep .. status .. tail)
   local row = #lines - 1
@@ -382,11 +311,7 @@ function M.render(buf, problem, meta, sections, opts)
       fold_rows[#lines - 1] = section
 
       if section.open then
-        if section.tags then
-          render_tags(section.tags, lines, marks)
-        else
-          render_md(section.text, lines, marks, INDENT .. INDENT, true)
-        end
+        render_md(section.text, lines, marks, INDENT .. INDENT, true)
       end
     end
   end
@@ -441,9 +366,19 @@ function M.render(buf, problem, meta, sections, opts)
   return fold_rows, images, links
 end
 
----@param raw string the `description` field of the problem metadata
-function M.sections(raw)
-  return split_sections(raw or "")
+--- The statement body plus its collapsible folds (hints and the like).
+---@param meta table problem metadata
+---@param provider string provider that served `meta`
+function M.sections(meta, provider)
+  local normalized = statement.normalize(meta, provider)
+  local out = {}
+  if vim.trim(normalized.body) ~= "" then
+    table.insert(out, { kind = "md", text = normalized.body })
+  end
+  for _, fold in ipairs(normalized.folds) do
+    table.insert(out, { kind = "fold", summary = fold.summary, text = fold.text, open = false })
+  end
+  return out
 end
 
 return M

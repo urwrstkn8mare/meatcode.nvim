@@ -31,7 +31,7 @@ local GROUPS = {
   MeatCodeBold = { bold = true },
   MeatCodeInlineCode = { link = "@markup.raw" },
   MeatCodeCodeBlock = { link = "CursorLine" },
-  MeatCodeMath = { link = "Constant" },
+  MeatCodeItalic = { italic = true },
   MeatCodeFold = { link = "Directory" },
   MeatCodeTag = { link = "Type" },
 }

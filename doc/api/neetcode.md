@@ -80,7 +80,8 @@ prefers IndexedDB. See `:MeatCode login` for the extraction snippet.
   "id": "two-integer-sum",
   "name": "Two Sum",
   "difficulty": "Easy",
-  "description": "...",            // already Markdown, renders as-is
+  "description": "...",            // Markdown, plus <details> accordions: Topics,
+                                   // hints, Company Tags (see below)
   "test_case_type": "function",    // "function" or "class"; both run locally
   "test_case_count": 33,           // hidden suite size
   "test_cases": [],                // always empty — hidden server-side
@@ -91,9 +92,16 @@ prefers IndexedDB. See `:MeatCode login` for the extraction snippet.
   "starterCode": { "python": "...", "cpp": "...", /* 10 languages */ },
   "solutions":   { "python": "...", "cpp": "...", /* 10 languages */ },
   "availableLanguages": ["python", "cpp", ...],
-  "article_body": "...", "video": "...", "topics": [...], "prereqs": [...]
+  "article_body": "...", "video": "...", "topics": [...], "prereqs": [...],
+  "company_tags": { "Google": 18, "Meta": 10 }   // company -> times asked; {} when Pro-gated
 }
 ```
+
+The Topics and Company Tags accordions only restate `topics` and
+`company_tags`; the plugin drops them from the statement and lists both in its
+footer, as it does for the other providers. The adapter exposes `company_tags`
+as a plain `companies` list, most-asked first. The remaining accordions
+(recommended complexity, hints) become folds.
 
 A locked problem (`free: false` in the list above) answers very differently —
 `queue` ("Design Double-ended Queue"), gated behind NeetCode Pro, returns just:
