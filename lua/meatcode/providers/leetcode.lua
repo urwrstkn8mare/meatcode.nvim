@@ -61,17 +61,25 @@ function M.submit(problem, meta, code, lang, cb)
   end)
 end
 
+--- `status_code` of a verdict whose tests all passed but whose code broke a
+--- restriction in the statement, per LeetCode's AI-judged restrictions check.
+local RESTRICTIONS_FAILED = 50
+
 function M.normalize_submission(data)
   local accepted = data.status_code == 10 or data.status_msg == "Accepted"
+  -- LeetCode voids the run's stats on this verdict (its site shows runtime and
+  -- memory as N/A, with no percentiles), and states why instead.
+  local restricted = data.status_code == RESTRICTIONS_FAILED
   return {
     status = data.status_msg or "Unknown",
     accepted = accepted,
     passed = tonumber(data.total_correct) or 0,
     total = tonumber(data.total_testcases) or 0,
-    runtime = data.status_runtime,
-    runtime_percentile = tonumber(data.runtime_percentile),
-    memory = data.status_memory,
-    memory_percentile = tonumber(data.memory_percentile),
+    runtime = not restricted and data.status_runtime or nil,
+    runtime_percentile = not restricted and tonumber(data.runtime_percentile) or nil,
+    memory = not restricted and data.status_memory or nil,
+    memory_percentile = not restricted and tonumber(data.memory_percentile) or nil,
+    restriction = restricted and data.ai_judge_message or nil,
     compile_output = data.full_compile_error or data.compile_error,
     runtime_error = data.full_runtime_error or data.runtime_error,
     input = data.last_testcase or data.input,

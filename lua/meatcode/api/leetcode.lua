@@ -395,17 +395,30 @@ local function submission_error(decoded)
   return decoded.error or decoded.detail or decoded.message
 end
 
+--- Polls the endpoint leetcode.com itself polls. Judging runs `state` PENDING
+--- → STARTED → … → SUCCESS; on problems with stated restrictions an AI check
+--- (`ai_state` PENDING → STARTED → SUCCESS) then has the final say and can
+--- turn passing tests into "Restrictions Failed". The legacy `/check/` only
+--- reports the tests, so it answers "Accepted" for code LeetCode rejects.
 local function check(submission_id, attempts, cb)
   request({
     name = "submission result",
-    url = string.format("%s/submissions/detail/%s/check/", BASE, submission_id),
+    url = string.format("%s/submissions/detail/%s/v2/check/", BASE, submission_id),
     method = "GET",
     timeout = 30,
   }, function(err, data)
     if err then
       return cb(err, nil)
     end
-    if data.state == "SUCCESS" or data.status_code then
+    local state, ai_state = data.state, data.ai_state
+    if ai_state == "FAILURE" then
+      return cb("LeetCode's restrictions check failed to run on the submission", nil)
+    end
+    if type(state) ~= "string" or state == "FAILURE" or state == "REVOKED" then
+      return cb("LeetCode failed to judge the submission (state: "
+        .. (type(state) == "string" and state or "none") .. ")", nil)
+    end
+    if state == "SUCCESS" and ai_state ~= "PENDING" and ai_state ~= "STARTED" then
       return cb(nil, data)
     end
     if attempts <= 0 then

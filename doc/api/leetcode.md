@@ -161,13 +161,17 @@ LeetCode source is at hand, the adapter first resolves it by slug with
 `question(titleSlug) { questionId }` and keeps it for the session. A missing
 id sent as the string `"nil"` got an HTML HTTP 500 back.
 
-Then poll until the judge finishes:
+Then poll until the judge finishes — on the same endpoint leetcode.com polls:
 
 ```jsonc
-GET https://leetcode.com/submissions/detail/<submission_id>/check/
+GET https://leetcode.com/submissions/detail/<submission_id>/v2/check/
 
-{"state": "PENDING"}                          // keep polling
+{"state": "PENDING"}                          // keep polling; also STARTED,
+                                              // PREPARING, COMPILING, RUNNING_TESTS
+{"state": "SUCCESS", "ai_state": "STARTED",   // tests done, restrictions check
+ "judger_status_code": 10, ...}               // still running: keep polling
 {"state": "SUCCESS",
+ "ai_state": "SUCCESS",                       // may be absent if nothing to check
  "status_code": 10,                           // 10 is the accepted verdict
  "status_msg": "Accepted",
  "total_correct": 57, "total_testcases": 57,
@@ -176,11 +180,26 @@ GET https://leetcode.com/submissions/detail/<submission_id>/check/
  "last_testcase": "...",                      // present on a failure
  "expected_output": "...", "code_output": "...", "std_output": "...",
  "compile_error": "...", "full_compile_error": "...",
- "runtime_error": "...", "full_runtime_error": "..."}
+ "runtime_error": "...", "full_runtime_error": "...",
+ "ai_judge_message": "..."}                   // why, on status_code 50
 ```
 
+Once the tests pass, problems whose statement restricts the approach get an
+AI-judged restrictions check (`ai_state` PENDING → STARTED → SUCCESS). It can
+overturn passing tests into `status_code` 50, "Restrictions Failed", with the
+reason in `ai_judge_message`; LeetCode then voids the run's runtime, memory and
+percentiles. The legacy `/submissions/detail/<id>/check/` reports the tests
+alone — "Accepted" with percentiles for code the site itself rejects — so the
+plugin does not poll it. `state` FAILURE or REVOKED, or `ai_state` FAILURE, is
+a judging error.
+
 The plugin polls every 750 ms, at least 10 times and up to twice the configured
-`timeout` in seconds. A submission is finished when `state` is `SUCCESS` or a
-`status_code` is present; `status_code == 10` (or `status_msg == "Accepted"`)
-is what records a completion. A failing verdict carries `last_testcase`, which
-`<leader>na` can drop straight into your local suite.
+`timeout` in seconds. A submission is finished when `state` is `SUCCESS` and
+`ai_state` is neither PENDING nor STARTED; `status_code == 10` (or
+`status_msg == "Accepted"`) is what records a completion. A failing verdict
+carries `last_testcase`, which `<leader>na` can drop straight into your local
+suite.
+
+`submissionDetails(submissionId)` returns the stored verdict afterwards
+(`statusCode`, `statusDisplay`, `aiJudgeMessage`); both check endpoints answer
+`{"state": "PENDING"}` for the judge once its result expires.

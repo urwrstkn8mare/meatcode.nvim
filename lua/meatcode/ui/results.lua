@@ -51,6 +51,31 @@ local function block(lines, spans, label, value, group)
   end
 end
 
+--- `block` for a judge's prose rather than program output: the results pane
+--- does not wrap, so reflow the words to fit the window showing `buf`.
+local function prose(lines, spans, buf, label, value, group)
+  if not has_text(value) then
+    return
+  end
+  local win = vim.fn.bufwinid(buf)
+  -- `block` indents 17 columns; one more keeps text off the window edge.
+  local width = math.max(20, (win ~= -1 and vim.api.nvim_win_get_width(win) or 80) - 18)
+  local rows = {}
+  for _, paragraph in ipairs(vim.split(value, "\n", { plain = true })) do
+    local row = ""
+    for word in paragraph:gmatch("%S+") do
+      if row ~= "" and vim.fn.strdisplaywidth(row .. " " .. word) > width then
+        table.insert(rows, row)
+        row = word
+      else
+        row = row == "" and word or row .. " " .. word
+      end
+    end
+    table.insert(rows, row)
+  end
+  block(lines, spans, label, table.concat(rows, "\n"), group)
+end
+
 local function show(buf, lines, spans)
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -149,6 +174,7 @@ function M.render_submit(buf, data)
       providers.get(data.provider).label, passed, total),
     accepted and "MeatCodePass" or "MeatCodeFail")
   push(lines, spans, "")
+  prose(lines, spans, buf, "violation", data.restriction, "MeatCodeFail")
 
   if has_text(data.runtime) then
     local beats = data.runtime_percentile
