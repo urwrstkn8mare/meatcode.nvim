@@ -39,7 +39,10 @@ local TOKEN_SNIPPET = [[
 --- wanted is the week-long refresh token (localStorage `@JWT:REFRESH_TOKEN`);
 --- the plugin mints access tokens from it. Every JWT in web storage is
 --- inspected rather than trusting one key name, and `token_type` in the
---- payload decides which one is the refresh token.
+--- payload decides which one is the refresh token. The submission judge
+--- (`/new/api/...`) has been seen rejecting a bearer-only login even when the
+--- token is fresh and unexpired, so `document.cookie` is printed alongside it
+--- -- `lintcode_auth.parse` picks up both from one paste.
 local LINTCODE_SNIPPET = [[
 (() => {
   const re = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
@@ -58,6 +61,7 @@ local LINTCODE_SNIPPET = [[
   const fresh = [...found].filter(t => (claims(t).exp || 0) > now);
   const t = fresh.find(t => claims(t).token_type === 'refresh') || fresh[0];
   console.log(t ? 'Bearer ' + t : 'NOT FOUND - sign in on this tab, reload, and rerun');
+  if (document.cookie) console.log('Cookie: ' + document.cookie);
 })()
 
 ]]
@@ -121,13 +125,17 @@ function M.login(provider, credential)
         "Open https://www.lintcode.com and sign in.",
         "Open the browser console (DevTools > Console).",
         "Press y here to copy the script below, then run it in that console.",
-        "Copy the `Bearer eyJ...` line it prints (a week-long refresh token).",
-        "Return here and press p to paste it.",
+        "Copy both lines it prints: `Bearer eyJ...` and `Cookie: ...`.",
+        "Return here and press p to paste them both.",
       },
       alternative = {
         "By hand instead: DevTools > Application > Local Storage and copy the",
         "@JWT:REFRESH_TOKEN value. The Authorization header off a network",
         "request also works, but that access token expires in minutes.",
+        "Submissions failing with \"no permission to access\" despite a fresh",
+        "login want the Cookie too: DevTools > Network > a request to",
+        "apiv1.lintcode.com > Request Headers > Cookie, pasted on its own",
+        "line as `Cookie: ...` alongside the token.",
       },
       prompt = "LintCode token: ",
       snippet = LINTCODE_SNIPPET,

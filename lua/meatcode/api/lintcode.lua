@@ -266,10 +266,30 @@ local function poll(submission_id, attempts, cb)
   end)
 end
 
+--- Codes LintCode returns when the account genuinely lacks access *and* when
+--- an otherwise-valid, unexpired bearer token is rejected outright by the
+--- newer `/new/api/...` judge endpoints (observed even right after a fresh
+--- login) -- in the latter case the raw message is misleading on its own, so
+--- both get the same actionable hint appended.
+local NO_PERMISSION_CODE, NOT_AUTHENTICATED_CODE = 1001, 1008
+
+local function with_permission_hint(cb)
+  return function(err, data, err_code)
+    if err and (err_code == NO_PERMISSION_CODE or err_code == NOT_AUTHENTICATED_CODE) then
+      err = err .. " — rerun :MeatCode login lintcode with a fresh token; if that"
+        .. " keeps failing, this endpoint also wants your session Cookie: DevTools >"
+        .. " Network > a request to apiv1.lintcode.com > Request Headers > Cookie,"
+        .. " pasted alongside the token"
+    end
+    return cb(err, data)
+  end
+end
+
 function M.submit(problem_id, code, lang, cb)
   if not auth.is_logged_in() then
     return cb("not logged in to LintCode — run :MeatCode login lintcode", nil)
   end
+  cb = with_permission_hint(cb)
   request("submission", {
     url = API .. "/new/api/submissions/",
     method = "POST",
@@ -281,8 +301,8 @@ function M.submit(problem_id, code, lang, cb)
       source = 99,
       code = code,
     }),
-  }, function(err, data)
-    if err then return cb(err, nil) end
+  }, function(err, data, err_code)
+    if err then return cb(err, nil, err_code) end
     local id = type(data) == "table" and data.id or data
     if not id then return cb("LintCode rejected the submission", nil) end
     poll(id, math.max(30, math.floor(config.options.timeout or 30)), cb)
