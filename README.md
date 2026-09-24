@@ -129,6 +129,7 @@ the roadmap for the full set).
 
 ## TODO
 
+- When starting local run while 1 is currently running, just cancel the currently running one and start the new run.
 - Windows Sandboxing support for local solution oracle
 - Sorting and filtering in the problem list view
 - Fetch LintCode beat by % metric and render memory usage in human readable text
