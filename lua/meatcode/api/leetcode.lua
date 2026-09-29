@@ -175,7 +175,7 @@ end
 
 local function request(opts, cb)
   opts.headers = vim.tbl_extend("force", auth.headers(), opts.headers or {})
-  client.request(opts, decode_response(opts.name or "LeetCode", cb))
+  return client.request(opts, decode_response(opts.name or "LeetCode", cb))
 end
 
 local function graphql(name, query, variables, cb)
@@ -455,6 +455,86 @@ function M.submit(slug, question_id, code, lang, cb)
     end
     check(id, math.max(10, math.floor((config.options.timeout or 30) * 2)), cb)
   end)
+end
+
+--- Why a test run was refused, in terms the user can act on.
+local function test_run_error(err)
+  if err:match("HTTP 429") then
+    return err .. " — LeetCode rate-limits test runs; wait a few seconds and run again"
+  end
+  if err:match("HTTP 403") then
+    return err .. " — refused by LeetCode's bot protection; retry, or refresh :MeatCode login leetcode"
+  end
+  return err
+end
+
+--- Run `code` against custom inputs the way the editor's "Run" button does.
+--- `data_input` is every case's arguments, one per line, back to back. LeetCode
+--- also runs its own solution on the same inputs and grades each output with
+--- the problem's checker, so a different but valid answer is still correct.
+---
+--- The finished payload carries `code_answer`, `expected_code_answer` and
+--- `std_output_list` (each padded with a trailing ""), a `compare_result` bit
+--- string, and `status_code` 10 when the code ran. Nothing is recorded as a
+--- submission.
+---@return fun() cancel stops polling; `cb` is never called afterwards
+function M.interpret(slug, question_id, code, lang, data_input, cb)
+  local cancelled, proc = false, nil
+  local function finish(err, data)
+    if cancelled then return end
+    cancelled = true
+    cb(err and test_run_error(err) or nil, data)
+  end
+  local function cancel()
+    cancelled = true
+    if proc then pcall(proc.kill, proc, 15) end
+  end
+  if not auth.is_logged_in() then
+    finish("not logged in to LeetCode — run :MeatCode login leetcode", nil)
+    return cancel
+  end
+
+  local function poll(id, attempts)
+    if cancelled then return end
+    proc = request({
+      name = "test run result",
+      url = string.format("%s/submissions/detail/%s/check/", BASE, id),
+      method = "GET",
+      timeout = 30,
+    }, function(err, data)
+      if cancelled then return end
+      if err then return finish(err, nil) end
+      if data.state == "SUCCESS" then return finish(nil, data) end
+      if data.state == "FAILURE" or data.state == "REVOKED" then
+        return finish("LeetCode failed to run the code (state: " .. data.state .. ")", nil)
+      end
+      if attempts <= 0 then return finish("LeetCode did not finish the test run", nil) end
+      vim.defer_fn(function() poll(id, attempts - 1) end, 750)
+    end)
+  end
+
+  proc = request({
+    name = "test run",
+    url = string.format("%s/problems/%s/interpret_solution/", BASE, slug),
+    method = "POST",
+    timeout = 60,
+    headers = { ["Referer"] = string.format("%s/problems/%s/", BASE, slug) },
+    body = vim.json.encode({
+      lang = M.lang(lang),
+      question_id = tostring(question_id),
+      typed_code = code,
+      data_input = data_input,
+    }),
+  }, function(err, data)
+    if cancelled then return end
+    if err then return finish(err, nil) end
+    local id = data and data.interpret_id
+    if not id then
+      return finish("LeetCode refused the test run: " .. tostring(submission_error(data)), nil)
+    end
+    poll(id, math.max(10, math.floor((config.options.timeout or 30) * 2)))
+  end)
+  return cancel
 end
 
 --- One page of the account's full submission history (all problems, most

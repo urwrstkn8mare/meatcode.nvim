@@ -260,16 +260,39 @@ function M.problems(cb)
   step()
 end
 
-local function poll(submission_id, attempts, cb)
-  request("submission result", {
-    url = string.format("%s/new/api/submissions/refresh/?id=%s", API, submission_id),
+--- Poll a submission until LintCode finishes judging it. A test submission is
+--- polled with `is_test_submission=true`; `alive`, when given, stops polling
+--- (without calling `cb`) once it returns false; `matches`, when given, keeps
+--- polling past a finished result it rejects; `running` is told whenever the
+--- judge reports it has not finished.
+local function poll(submission_id, attempts, cb, test, alive, matches, running)
+  if alive and not alive() then return end
+  request(test and "test run result" or "submission result", {
+    url = string.format("%s/new/api/submissions/refresh/?id=%s%s", API, submission_id,
+      test and "&is_test_submission=true" or ""),
   }, function(err, data)
+    if alive and not alive() then return end
     if err then return cb(err, nil) end
     if type(data) ~= "table" then return cb("LintCode returned an empty submission result", nil) end
-    if data.judge_finished == true or data.judgeFinished == true then return cb(nil, data) end
+    local finished = data.judge_finished == true or data.judgeFinished == true
+    if not finished and running then running() end
+    if finished and (not matches or matches(data)) then
+      return cb(nil, data)
+    end
     if attempts <= 0 then return cb("LintCode did not finish judging the submission", nil) end
-    vim.defer_fn(function() poll(submission_id, attempts - 1, cb) end, 1000)
+    vim.defer_fn(function() poll(submission_id, attempts - 1, cb, test, alive, matches, running) end, 1000)
   end)
+end
+
+--- How long a finished test-run result must have stood before it can be
+--- trusted when the judge was never seen restarting (see `M.test`).
+local SETTLE_MS = 8000
+
+--- A field of a test run as plain text: LintCode wraps them in
+--- `<pre><code>` markup and HTML entities.
+local function plain(value)
+  if type(value) ~= "string" then return "" end
+  return vim.trim(examples.unescape((value:gsub("<[^>]->", ""))))
 end
 
 --- Codes LintCode returns when the account genuinely lacks access *and* when
@@ -313,6 +336,60 @@ function M.submit(problem_id, code, lang, cb)
     if not id then return cb("LintCode rejected the submission", nil) end
     poll(id, math.max(30, math.floor(config.options.timeout or 30)), cb)
   end)
+end
+
+--- Run `code` on one custom input the way the editor's "Test" button does: a
+--- test submission (`is_test_submission: true` plus `input`), which LintCode
+--- judges against its own solution without recording a submission. It takes a
+--- single input per run. The finished payload carries `status` ("Accepted",
+--- "Wrong Answer", ...), `expected`, `output`, `stdout`, `compile_info` and
+--- `error_message`, each wrapped in `<pre><code>` markup.
+---
+--- LintCode keeps one test-run slot per account and problem: every POST gets
+--- the same id back, and the slot takes the new `input` at once while still
+--- showing the previous run's finished verdict until the judge picks the new
+--- run up. A finished result is only taken for this input, and only once the
+--- judge has visibly restarted or `SETTLE_MS` have passed (the web editor
+--- itself waits 8 s before its first poll).
+---@return fun() cancel stops polling; `cb` is never called afterwards
+function M.test(problem_id, code, lang, input, cb)
+  local cancelled = false
+  local function alive() return not cancelled end
+  local finish = with_permission_hint(function(err, data)
+    if cancelled then return end
+    cancelled = true
+    cb(err, data)
+  end)
+  if not auth.is_logged_in() then
+    finish("not logged in to LintCode — run :MeatCode login lintcode", nil)
+    return function() cancelled = true end
+  end
+  request("test run", {
+    url = API .. "/new/api/submissions/",
+    method = "POST",
+    timeout = 60,
+    body = vim.json.encode({
+      is_test_submission = true,
+      problem_id = tonumber(problem_id) or problem_id,
+      language = M.lang(lang),
+      source = 99,
+      input = input,
+      code = code,
+    }),
+  }, function(err, data, err_code)
+    if cancelled then return end
+    if err then return finish(err, nil, err_code) end
+    local id = type(data) == "table" and data.id or data
+    if not id then return finish("LintCode refused the test run", nil) end
+    local posted, restarted = vim.uv.now(), false
+    poll(id, math.max(30, math.floor(config.options.timeout or 30)), finish, true, alive,
+      function(result)
+        if plain(result.input) ~= vim.trim(input) then return false end
+        return restarted or vim.uv.now() - posted >= SETTLE_MS
+      end,
+      function() restarted = true end)
+  end)
+  return function() cancelled = true end
 end
 
 --- LintCode's numeric verdict for an accepted submission.

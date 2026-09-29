@@ -60,21 +60,38 @@ function M.problem(problem_id, cb)
   end)
 end
 
---- Run code against a set of visible test cases on NeetCode's judge.
+--- Run code against custom test cases on NeetCode's judge (the editor's
+--- "Run"). Every case comes back as its own Judge0-style result:
+--- `status.description` ("Accepted", "Wrong Answer", ...), `stderr`,
+--- `compile_output`, and `last_executed_test_case` with `expected_output`,
+--- `user_output` and `user_logs`. The verdict comes from NeetCode's checker, so
+--- a different valid answer is "Accepted" (and echoed as `expected_output`).
 ---@param problem_id string
 ---@param code string
 ---@param lang string
 ---@param test_cases string[] each a newline-separated "name=value" block
 ---@param cb fun(err: string|nil, results: table[]|nil)
+---@return fun() cancel kills the request; `cb` is never called afterwards
 function M.run(problem_id, code, lang, test_cases, cb)
+  local cancelled, proc = false, nil
+  local function finish(err, results)
+    if cancelled then return end
+    cancelled = true
+    cb(err, results)
+  end
   authed(function(token, done)
-    client.callable("runCodeFunctionHttp", {
+    if cancelled then return end
+    proc = client.callable("runCodeFunctionHttp", {
       problemId = problem_id,
       rawCode = code,
       lang = lang,
       testCases = test_cases,
     }, { token = token, timeout = 90 }, done)
-  end, cb)
+  end, finish)
+  return function()
+    cancelled = true
+    if proc then pcall(proc.kill, proc, 15) end
+  end
 end
 
 --- Submit against the full hidden test suite.

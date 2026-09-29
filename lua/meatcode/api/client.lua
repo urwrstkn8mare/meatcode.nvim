@@ -5,6 +5,7 @@ local M = {}
 --- Low level curl wrapper.
 ---@param opts table url, method, body, headers, timeout
 ---@param cb fun(err: string|nil, res: {status: integer, body: string}|nil)
+---@return vim.SystemObj|nil proc the running curl, so a caller can kill it
 function M.request(opts, cb)
   local url = assert(opts.url, "url required")
   local timeout = opts.timeout or config.options.timeout
@@ -34,7 +35,7 @@ function M.request(opts, cb)
 
   table.insert(cmd, url)
 
-  local ok, err = pcall(vim.system, cmd, { text = true, stdin = stdin }, function(res)
+  local ok, proc = pcall(vim.system, cmd, { text = true, stdin = stdin }, function(res)
     if res.code ~= 0 then
       local msg = (res.stderr or ""):gsub("%s+$", "")
       if msg == "" then
@@ -57,8 +58,10 @@ function M.request(opts, cb)
   end)
 
   if not ok then
-    cb(tostring(err), nil)
+    cb(tostring(proc), nil)
+    return nil
   end
+  return proc
 end
 
 --- Fetch a URL and hand back the raw body, failing on non-2xx.
@@ -85,6 +88,7 @@ end
 ---@param data table payload placed under the `data` key
 ---@param opts table|nil token (string), timeout (seconds)
 ---@param cb fun(err: string|nil, data: any)
+---@return vim.SystemObj|nil proc
 function M.callable(fn, data, opts, cb)
   opts = opts or {}
   local headers = { ["Content-Type"] = "application/json" }
@@ -92,7 +96,7 @@ function M.callable(fn, data, opts, cb)
     headers["Authorization"] = "Bearer " .. opts.token
   end
 
-  M.request({
+  return M.request({
     url = "https://neetcode.io/api/" .. fn,
     method = "POST",
     body = vim.json.encode({ data = data }),
