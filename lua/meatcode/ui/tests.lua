@@ -66,7 +66,7 @@ function M.open(path, defaults, input)
     row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
     col = math.max(0, math.floor((vim.o.columns - width) / 2)),
   })
-  vim.wo[win].number = true
+  vim.wo[win][0].number = true
   if input then
     vim.api.nvim_win_set_cursor(win, { #lines, 0 })
     vim.api.nvim_buf_call(buf, function() vim.cmd("write") end)

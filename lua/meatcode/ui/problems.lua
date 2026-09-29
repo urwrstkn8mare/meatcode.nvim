@@ -145,7 +145,7 @@ function M.open(pattern, list)
   vim.bo[state.buf].bufhidden = "hide"
   vim.bo[state.buf].filetype = "meatcode-roadmap-problems"
   pages.push({ id = "problems", buf = state.buf, title = pattern, on_show = render })
-  vim.wo[0].cursorline = true
+  vim.wo[0][0].cursorline = true
 
   keymaps()
   render()

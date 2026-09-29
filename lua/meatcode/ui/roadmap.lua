@@ -307,8 +307,8 @@ function M.open()
   end
   pages.push({ id = "roadmap", buf = state.buf, title = "roadmap", on_show = render })
 
-  vim.wo[0].wrap = false
-  vim.wo[0].cursorline = false
+  vim.wo[0][0].wrap = false
+  vim.wo[0][0].cursorline = false
   vim.bo[state.buf].modifiable = false
 
   keymaps()

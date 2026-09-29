@@ -26,7 +26,7 @@ function M.open(opts)
     row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
     col = math.max(0, math.floor((vim.o.columns - width) / 2)),
   })
-  vim.wo[win].wrap = true
+  vim.wo[win][0].wrap = true
   local function close()
     if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
   end

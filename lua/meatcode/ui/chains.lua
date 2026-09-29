@@ -181,7 +181,7 @@ function M.open()
     title = " Provider chains ",
     title_pos = "center",
   })
-  vim.wo[state.win].cursorline = true
+  vim.wo[state.win][0].cursorline = true
 
   keymaps()
   render()

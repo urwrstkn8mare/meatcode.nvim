@@ -1468,19 +1468,25 @@ local function build_windows(s)
   vim.bo[s.desc_buf].filetype = "meatcode-problem"
   vim.bo[s.desc_buf].modified = false
   tabs.name_buffer(s.desc_buf, s.problem.name)
-  vim.wo[s.desc_win].wrap = true
-  vim.wo[s.desc_win].linebreak = true
-  vim.wo[s.desc_win].breakindent = true
-  vim.wo[s.desc_win].showbreak = ""
-  vim.wo[s.desc_win].conceallevel = 2
-  vim.wo[s.desc_win].concealcursor = "nvic"
-  vim.wo[s.desc_win].number = false
-  vim.wo[s.desc_win].relativenumber = false
-  vim.wo[s.desc_win].signcolumn = "no"
+  vim.wo[s.desc_win][0].wrap = true
+  vim.wo[s.desc_win][0].linebreak = true
+  vim.wo[s.desc_win][0].breakindent = true
+  vim.wo[s.desc_win][0].showbreak = ""
+  vim.wo[s.desc_win][0].conceallevel = 2
+  vim.wo[s.desc_win][0].concealcursor = "nvic"
+  vim.wo[s.desc_win][0].number = false
+  vim.wo[s.desc_win][0].relativenumber = false
+  vim.wo[s.desc_win][0].signcolumn = "no"
 
   vim.cmd("botright vsplit " .. vim.fn.fnameescape(s.path))
   s.code_win = vim.api.nvim_get_current_win()
   s.code_buf = vim.api.nvim_get_current_buf()
+  -- A split copies the window-local options of the window it came from: the
+  -- description pane's (no numbers, wrapping, conceal) and, through `tabnew`,
+  -- a page's. The code pane is the user's editor, so give it their own
+  -- settings back before the filetype's autocmds run.
+  vim.cmd("setlocal number< relativenumber< signcolumn< foldcolumn< list< wrap< cursorline<"
+    .. " colorcolumn< linebreak< breakindent< showbreak< conceallevel< concealcursor< fillchars<")
   vim.bo[s.code_buf].filetype = lang_info.filetype(s.lang)
   track_pane_cursor(s, s.code_buf)
 
@@ -1492,10 +1498,10 @@ local function build_windows(s)
   vim.bo[s.res_buf].filetype = "meatcode-results"
   vim.bo[s.res_buf].bufhidden = "wipe"
   vim.bo[s.res_buf].modifiable = false
-  vim.wo[s.res_win].number = false
-  vim.wo[s.res_win].relativenumber = false
-  vim.wo[s.res_win].signcolumn = "no"
-  vim.wo[s.res_win].wrap = false
+  vim.wo[s.res_win][0].number = false
+  vim.wo[s.res_win][0].relativenumber = false
+  vim.wo[s.res_win][0].signcolumn = "no"
+  vim.wo[s.res_win][0].wrap = false
   relayout(s)
   vim.api.nvim_set_current_win(s.code_win)
 end

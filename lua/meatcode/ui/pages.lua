@@ -21,14 +21,14 @@ end
 
 --- A page is a screen, not a file: no numbers, no signs, no wrapping.
 local function dress(win)
-  vim.wo[win].number = false
-  vim.wo[win].relativenumber = false
-  vim.wo[win].signcolumn = "no"
-  vim.wo[win].foldcolumn = "0"
-  vim.wo[win].list = false
-  vim.wo[win].wrap = false
-  vim.wo[win].cursorline = false
-  vim.wo[win].colorcolumn = ""
+  vim.wo[win][0].number = false
+  vim.wo[win][0].relativenumber = false
+  vim.wo[win][0].signcolumn = "no"
+  vim.wo[win][0].foldcolumn = "0"
+  vim.wo[win][0].list = false
+  vim.wo[win][0].wrap = false
+  vim.wo[win][0].cursorline = false
+  vim.wo[win][0].colorcolumn = ""
   vim.opt_local.fillchars:append("eob: ")
 end
 

@@ -354,7 +354,7 @@ function M.open()
   end
   pages.push({ id = "home", buf = state.buf, title = "home" })
 
-  vim.wo[vim.api.nvim_get_current_win()].cursorline = true
+  vim.wo[vim.api.nvim_get_current_win()][0].cursorline = true
   vim.bo[state.buf].modifiable = false
 
   keymaps()
