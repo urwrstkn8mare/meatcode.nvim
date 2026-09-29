@@ -450,3 +450,17 @@ inline std::string judge(const std::string &actual,
 }
 
 }  // namespace ncrt
+
+// Defaults for AddressSanitizer and UndefinedBehaviorSanitizer, which the
+// default runner.cpp.cmd enables; harmless when they are off. Solutions and
+// this harness never free their nodes, so leak checking stays off. A report
+// exits with status 1 instead of aborting, and aborts and traps (a failed
+// libc++ hardening check, assert()) get a stack trace too. Undefined behaviour
+// stops the run at the first report, as it does on LeetCode.
+extern "C" __attribute__((used, visibility("default"))) const char *__asan_default_options() {
+  return "detect_leaks=0:abort_on_error=0:handle_abort=1:handle_sigill=1:handle_sigtrap=1:"
+         "dump_registers=0:print_legend=0";
+}
+extern "C" __attribute__((used, visibility("default"))) const char *__ubsan_default_options() {
+  return "halt_on_error=1:print_stacktrace=1";
+}

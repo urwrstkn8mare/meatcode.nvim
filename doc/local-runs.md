@@ -231,11 +231,27 @@ filesystem state across otherwise independent cases.
 
 ## When C++ crashes
 
-A hard crash keeps its signal number and gets a plain-English diagnosis where
-one is known — `SIGSEGV` for invalid memory access, `SIGBUS` for invalid or
-misaligned access. If LLDB is installed the harness reruns once, only after a
-crash, and appends a source backtrace. The visible test case that was running
-is named when the harness had got far enough to start one.
+Local C++ builds follow LeetCode's judge: `-O2` with AddressSanitizer, plus
+UndefinedBehaviorSanitizer and libc++'s debug-mode hardening. An out-of-bounds
+access, use-after-free, null dereference, signed overflow, stack overflow or
+invalid `std::sort` comparator therefore stops a local run as it would a
+submission. The hardening matters on macOS: libc++ keeps short strings inside
+the `std::string` object, so reading just past the end of one stays inside the
+object where AddressSanitizer cannot see it, while the same read overflows
+LeetCode's libstdc++ string and fails there. The checks are stricter than
+LeetCode in one way: indexing a `std::vector` past `size()` fails even when it
+stays within the allocated capacity. On Linux the sanitizers need GCC's
+`libasan`/`libubsan` or Clang's runtime; drop the `-fsanitize` flags from
+`runner.cpp.cmd` if your toolchain lacks them.
+
+A sanitizer or libc++ report is shown as the run's error, after the number of
+the visible test case that was running.
+
+Without the sanitizers (a `runner.cpp.cmd` of your own), a crash keeps its
+signal number and gets a plain-English diagnosis where one is known —
+`SIGSEGV` for invalid memory access, `SIGBUS` for invalid or misaligned access,
+`SIGTRAP` for a failed runtime check. If LLDB is installed and one worker ran
+the suite, the harness reruns once under it and appends a source backtrace.
 
 ## Running provider code safely
 

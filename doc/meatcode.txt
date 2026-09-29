@@ -197,6 +197,11 @@ against the selected executable class, or compare it with a known answer list.
 Encode/decode pairs such as Serialize and Deserialize Binary Tree are judged by
 round-tripping the input through both halves, which needs no oracle at all.
 
+C++ builds like LeetCode's judge: -O2 with AddressSanitizer, plus
+UndefinedBehaviorSanitizer and libc++ debug hardening, so an out-of-bounds
+index, use-after-free, null dereference, signed overflow or invalid sort
+comparator stops a local run as it would a submission.
+
 Provider solutions and checkers are remote code. They run separately from your
 solution: oracle validation, checker grading and first-time per-case output
 computation are sandboxed (cached thereafter), then your code runs alone,
@@ -259,7 +264,12 @@ Defaults: >lua
         parallelism = 0,
         python = { cmd = { "python3" }, auto_imports = true },
         cpp = {
-          cmd = { "c++", "-std=c++23", "-g", "-O0", "-o", "{out}", "{source}" },
+          cmd = {
+            "c++", "-std=c++23", "-O2", "-g",
+            "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+            "-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG",
+            "-o", "{out}", "{source}",
+          },
           clangd = true,
         },
         time_limit = 10,

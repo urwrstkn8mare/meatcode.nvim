@@ -294,6 +294,7 @@ end
 local function crash_diagnostic(signal)
   local diagnostics = {
     [4] = "SIGILL: illegal instruction",
+    [5] = "SIGTRAP: a runtime check failed, such as an out-of-bounds index",
     [6] = "SIGABRT: abort",
     [8] = "SIGFPE: arithmetic exception",
     [11] = "SIGSEGV: segmentation fault — invalid memory access",

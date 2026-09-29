@@ -41,9 +41,17 @@ local defaults = {
 			auto_imports = true,
 		},
 		cpp = {
-			-- {source} and {out} are substituted at build time. Keep debug symbols
-			-- and disable optimisation so an LLDB rerun can show source backtraces.
-			cmd = { "c++", "-std=c++23", "-g", "-O0", "-o", "{out}", "{source}" },
+			-- {source} and {out} are substituted at build time. Like LeetCode's
+			-- judge: -O2 with AddressSanitizer, plus UndefinedBehaviorSanitizer and
+			-- libc++'s debug hardening, whose bounds checks catch reads just past
+			-- a short std::string, which libc++ stores inside the object where
+			-- ASan cannot see. -g lets crash reports name the line in your solution.
+			cmd = {
+				"c++", "-std=c++23", "-O2", "-g",
+				"-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+				"-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG",
+				"-o", "{out}", "{source}",
+			},
 			-- Drop a `.clangd` beside your solutions that force-includes a header
 			-- supplying the #includes and node types NeetCode's judge provides
 			-- implicitly, so a language server stops flagging valid solutions.

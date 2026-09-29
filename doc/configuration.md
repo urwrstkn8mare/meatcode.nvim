@@ -42,9 +42,16 @@ require("meatcode").setup({
       auto_imports = true,
     },
     cpp = {
-      -- {source} and {out} are substituted at build time. Debug symbols and
-      -- -O0 are what let an LLDB rerun show a source backtrace on a crash.
-      cmd = { "c++", "-std=c++23", "-g", "-O0", "-o", "{out}", "{source}" },
+      -- {source} and {out} are substituted at build time. Like LeetCode's
+      -- judge: -O2 with AddressSanitizer, plus UndefinedBehaviorSanitizer and
+      -- libc++'s debug hardening. -g lets crash reports name the line in your
+      -- solution. See "When C++ crashes" in doc/local-runs.md.
+      cmd = {
+        "c++", "-std=c++23", "-O2", "-g",
+        "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+        "-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG",
+        "-o", "{out}", "{source}",
+      },
       -- Generate a .clangd beside your solutions. See doc/cpp.md.
       clangd = true,
     },
