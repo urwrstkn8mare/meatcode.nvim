@@ -428,4 +428,25 @@ inline std::string canonical(const std::string &json) {
   return s + "]";
 }
 
+// Grade `actual` against a list of acceptable rendered answers, implementing
+// the same contract as the Python harness's `judge`: an empty `answers`
+// yields `no_oracle` with no expected value; an exact match is a `pass`;
+// failing that, an order-insensitive (`canonical`) match is a
+// `pass_unordered`; otherwise `fail`, reported against the first answer.
+// Returns the status string and writes the answer to display into `expected`.
+inline std::string judge(const std::string &actual,
+                          const std::vector<std::string> &answers,
+                          std::string &expected) {
+  if (answers.empty()) return "no_oracle";
+  expected = answers[0];
+  for (const std::string &ans : answers) {
+    if (actual == ans) { expected = ans; return "pass"; }
+  }
+  std::string actualCanon = canonical(actual);
+  for (const std::string &ans : answers) {
+    if (actualCanon == canonical(ans)) { expected = ans; return "pass_unordered"; }
+  }
+  return "fail";
+}
+
 }  // namespace ncrt

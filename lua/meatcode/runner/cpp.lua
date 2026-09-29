@@ -192,9 +192,10 @@ int main(int argc, char **argv) {
     std::string block = cases.arr[ci].str;
     ncrt::Args A = ncrt::parseArgs(block);
 
-    std::string expected, actual, status, logs, errmsg;
+    std::string actual, status, logs, errmsg, expected;
+    std::vector<std::string> answers;
     double elapsed = 0.0;
-    bool oracleOk = true, userErr = false, judged = true;
+    bool oracleOk = true, userErr = false;
 
     try {
 %s
@@ -209,6 +210,7 @@ int main(int argc, char **argv) {
     if (!oracleOk) {
       status = "oracle_error";
     } else {
+      if (!answers.empty()) expected = answers[0];
       std::ostringstream cap;
       std::streambuf *saved = std::cout.rdbuf(cap.rdbuf());
       auto t0 = std::chrono::steady_clock::now();
@@ -227,10 +229,7 @@ int main(int argc, char **argv) {
       logs = cap.str();
 
       if (userErr) status = "error";
-      else if (!judged) status = "no_oracle";
-      else if (actual == expected) status = "pass";
-      else if (ncrt::canonical(actual) == ncrt::canonical(expected)) status = "pass_unordered";
-      else status = "fail";
+      else status = ncrt::judge(actual, answers, expected);
     }
 
     if (!firstCase) out += ",";
@@ -238,7 +237,7 @@ int main(int argc, char **argv) {
     out += "{\"index\":" + std::to_string(ci);
     out += ",\"input\":" + ncrt::tj(block);
     out += ",\"status\":" + ncrt::tj(status);
-    if (judged) out += ",\"expected\":" + ncrt::tj(expected);
+    if (!answers.empty()) out += ",\"expected\":" + ncrt::tj(expected);
     out += ",\"actual\":" + ncrt::tj(actual);
     out += ",\"elapsed_ms\":" + ncrt::tj(elapsed);
     if (!logs.empty()) out += ",\"stdout\":" + ncrt::tj(logs);
@@ -252,12 +251,16 @@ int main(int argc, char **argv) {
 }
 ]]
 
---- Take the expected output of case `ci` from the answers the statement
---- published, marking the case unjudged when it published none.
+--- Take every known answer for case `ci` and parse it into the vector
+--- `ncrt::judge` grades against, leaving it empty when none parse.
 local PUBLISHED_EXPECTED = [[
         const ncrt::JV &pub = ncrt::argAt(published, ci);
-        if (pub.type != ncrt::JV::STR || pub.str.empty()) judged = false;
-        else expected = ncrt::render(ncrt::parseJson(pub.str));
+        for (size_t k = 0; k < pub.arr.size(); k++) {
+          const ncrt::JV &item = pub.arr[k];
+          if (item.type == ncrt::JV::STR && !item.str.empty()) {
+            answers.push_back(ncrt::render(ncrt::parseJson(item.str)));
+          }
+        }
 ]]
 
 --- `user.cpp` is always included; `ref.cpp` only when it is the oracle, since
@@ -283,7 +286,7 @@ function M.generate(starter, oracle)
   end
 
   local expected_block = oracle == "expected" and PUBLISHED_EXPECTED
-    or emit_call(sig, "refsol", "expected")
+    or (emit_call(sig, "refsol", "expected") .. "\n        answers.push_back(expected);")
   local driver = string.format(FUNCTION_DRIVER, "", sig.name,
     expected_block, emit_call(sig, "usersol", "actual"))
 
@@ -465,9 +468,10 @@ int main(int argc, char **argv) {
     std::fflush(stderr);
 
     const ncrt::JV &ops = cases.arr[ci];
-    std::string expected, actual, status, logs, errmsg;
+    std::string actual, status, logs, errmsg, expected;
+    std::vector<std::string> answers;
     double elapsed = 0.0;
-    bool oracleOk = true, userErr = false, judged = true;
+    bool oracleOk = true, userErr = false;
 
     try {
 %s
@@ -482,6 +486,7 @@ int main(int argc, char **argv) {
     if (!oracleOk) {
       status = "oracle_error";
     } else {
+      if (!answers.empty()) expected = answers[0];
       std::ostringstream cap;
       std::streambuf *saved = std::cout.rdbuf(cap.rdbuf());
       auto t0 = std::chrono::steady_clock::now();
@@ -500,10 +505,7 @@ int main(int argc, char **argv) {
       logs = cap.str();
 
       if (userErr) status = "error";
-      else if (!judged) status = "no_oracle";
-      else if (actual == expected) status = "pass";
-      else if (ncrt::canonical(actual) == ncrt::canonical(expected)) status = "pass_unordered";
-      else status = "fail";
+      else status = ncrt::judge(actual, answers, expected);
     }
 
     if (!firstCase) out += ",";
@@ -511,7 +513,7 @@ int main(int argc, char **argv) {
     out += "{\"index\":" + std::to_string(ci);
     out += ",\"input\":" + ncrt::tj(ncrt::argAt(raw, ci).str);
     out += ",\"status\":" + ncrt::tj(status);
-    if (judged) out += ",\"expected\":" + ncrt::tj(expected);
+    if (!answers.empty()) out += ",\"expected\":" + ncrt::tj(expected);
     out += ",\"actual\":" + ncrt::tj(actual);
     out += ",\"elapsed_ms\":" + ncrt::tj(elapsed);
     if (!logs.empty()) out += ",\"stdout\":" + ncrt::tj(logs);
@@ -525,7 +527,7 @@ int main(int argc, char **argv) {
 }
 ]], emit_replay(cls), cls.name,
     oracle == "expected" and PUBLISHED_EXPECTED
-      or string.format("      expected = replay<refsol::%s>(ops);", cls.name),
+      or string.format("      expected = replay<refsol::%s>(ops);\n      answers.push_back(expected);", cls.name),
     cls.name)
 
   return translation_unit(driver, oracle), nil
@@ -569,8 +571,8 @@ static std::string roundtrip(const ncrt::Args &A) {
   -- The pair has to invert itself, so with no reference solution the input is
   -- its own expected output.
   local expected_block = oracle == "expected"
-      and string.format('        expected = ncrt::render(ncrt::pick(A, 0, "%s"));', p.name)
-    or string.format("        expected = roundtrip<refsol::%s>(A);", cls.name)
+      and string.format('        answers.push_back(ncrt::render(ncrt::pick(A, 0, "%s")));', p.name)
+    or string.format("        answers.push_back(roundtrip<refsol::%s>(A));", cls.name)
   local driver = string.format(FUNCTION_DRIVER, preamble,
     enc.name .. " -> " .. dec.name,
     expected_block,

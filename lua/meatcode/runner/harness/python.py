@@ -1,14 +1,15 @@
 """Local test harness for meatcode.nvim (Python).
 
-Two oracles produce the expected output a case is judged against:
+Two oracles produce the answers a case is judged against:
 
-- "reference": NeetCode publishes its own solution, so it is run over the same
-  input and the two results are diffed. Judges any input, including cases you
-  wrote yourself.
-- "expected": LeetCode and LintCode publish no solution, but they print the
-  answer for every example they show. Those answers arrive in expected.json,
-  aligned with cases.json, and judge exactly the cases they belong to. A case
-  with no published answer still runs, and reports its output unjudged.
+- "reference": the harness runs a provider's solution (NeetCode reference,
+  editorial or community code being validated) over the same input and diffs
+  the two results. Judges any input, including cases you wrote yourself.
+- "expected": the runner's answer cache (judge answers, statement answers, the
+  selected oracle's outputs) arrives in expected.json, aligned with
+  cases.json: every acceptable answer per case, since a problem may accept
+  several. A case with no known answer still runs, and reports its output
+  unjudged.
 
 Both the user solution and the signature source run in isolated namespaces
 seeded with the type names their annotations expect (List, Optional, ListNode,
@@ -332,48 +333,67 @@ def annotation_at(params, declared, i):
 
 
 def load_expected(workdir, count):
-    """Published answers per case, as (judged, value) pairs.
+    """Known answers per case: a list of acceptable values (empty when none
+    are usable).
 
-    `judged` is false when the statement published no usable answer for that
-    input — a case the user added, or one whose answer is written as prose.
+    Each element of `expected.json` is `null` or a list of JSON- or
+    Python-literal-encoded strings; every string that parses successfully
+    becomes one acceptable answer. A case left with an empty list (no
+    element, `null`, `[]`, or every string failing to parse — an answer
+    written as prose) grades as `no_oracle`.
     """
     path = os.path.join(workdir, "expected.json")
     if not os.path.exists(path):
-        return [(False, None)] * count
+        return [[] for _ in range(count)]
     with open(path) as fh:
         raw = json.load(fh)
     out = []
     for i in range(count):
         value = raw[i] if i < len(raw) else None
-        if not isinstance(value, str) or not value.strip():
-            out.append((False, None))
-            continue
-        try:
-            out.append((True, normalize(json.loads(value))))
-        except Exception:
-            try:
-                out.append((True, normalize(ast.literal_eval(value))))
-            except Exception:
-                # Statements sometimes annotate the answer in prose
-                # ("5, nums = [0,1,_,_]"); that cannot be judged against.
-                out.append((False, None))
+        answers = []
+        if isinstance(value, list):
+            for item in value:
+                if not isinstance(item, str) or not item.strip():
+                    continue
+                try:
+                    answers.append(normalize(json.loads(item)))
+                    continue
+                except Exception:
+                    pass
+                try:
+                    answers.append(normalize(ast.literal_eval(item)))
+                except Exception:
+                    # Statements sometimes annotate the answer in prose
+                    # ("5, nums = [0,1,_,_]"); that cannot be judged against.
+                    pass
+        out.append(answers)
     return out
 
 
-def judge(entry, actual, expected, judged=True):
-    """Grade one case. `judged` is false when no answer was published for it."""
-    if not judged:
+def judge(entry, actual, answers):
+    """Grade one case against a list of acceptable answers.
+
+    An empty `answers` list means no usable answer is known for this case.
+    Otherwise an exact match to any answer is a `pass`; failing that,
+    an order-insensitive (`canonical`) match to any answer is a
+    `pass_unordered`; otherwise `fail`, reported against the first answer.
+    """
+    if not answers:
         entry["status"] = "no_oracle"
         return
-    entry["expected"] = fmt(expected)
-    if actual == expected:
-        entry["status"] = "pass"
-    elif canonical(actual) == canonical(expected):
-        # Many problems accept any ordering; the real judge decides, so we
-        # surface this as a pass but say the ordering differed.
-        entry["status"] = "pass_unordered"
-    else:
-        entry["status"] = "fail"
+    entry["expected"] = fmt(answers[0])
+    for ans in answers:
+        if actual == ans:
+            entry["expected"] = fmt(ans)
+            entry["status"] = "pass"
+            return
+    actual_canon = canonical(actual)
+    for ans in answers:
+        if actual_canon == canonical(ans):
+            entry["expected"] = fmt(ans)
+            entry["status"] = "pass_unordered"
+            return
+    entry["status"] = "fail"
 
 
 def annotation_names(ann):
@@ -609,12 +629,11 @@ def run_class_cases(workdir, report, oracle, shard=0, stride=1):
             continue
         entry = {"index": i, "input": raw_cases[i] if i < len(raw_cases) else ""}
 
-        judged = True
         if published is not None:
-            judged, expected = published[i]
+            answers = published[i]
         else:
             try:
-                expected = replay(RefClass, ops, anns)
+                answers = [replay(RefClass, ops, anns)]
             except Exception:
                 entry["status"] = "oracle_error"
                 entry["error"] = traceback.format_exc(limit=3)
@@ -643,7 +662,7 @@ def run_class_cases(workdir, report, oracle, shard=0, stride=1):
         entry["actual"] = fmt(actual)
         if buf.getvalue():
             entry["stdout"] = buf.getvalue()
-        judge(entry, actual, expected, judged)
+        judge(entry, actual, answers)
         report["cases"].append(entry)
 
 
@@ -700,14 +719,13 @@ def run_roundtrip_cases(workdir, report, oracle, shard=0, stride=1):
         args = parse_input(block)
         entry = {"index": i, "input": block}
 
-        judged = True
         if oracle == "expected":
-            expected = normalize(coerce(copy.deepcopy(args[0][1]),
+            answers = [normalize(coerce(copy.deepcopy(args[0][1]),
                                         annotation_at(params, declared, 0),
-                                        user_ns, [])) if args else None
+                                        user_ns, []))] if args else []
         else:
             try:
-                expected = roundtrip(RefClass, ref_ns, args)
+                answers = [roundtrip(RefClass, ref_ns, args)]
             except Unsupported:
                 raise
             except Exception:
@@ -738,7 +756,7 @@ def run_roundtrip_cases(workdir, report, oracle, shard=0, stride=1):
         entry["actual"] = fmt(actual)
         if buf.getvalue():
             entry["stdout"] = buf.getvalue()
-        judge(entry, actual, expected, judged)
+        judge(entry, actual, answers)
         report["cases"].append(entry)
 
 
@@ -800,12 +818,12 @@ def main():
         args = parse_input(block)
         entry = {"index": i, "input": block}
 
-        judged = True
         if published is not None:
-            judged, expected = published[i]
+            answers = published[i]
         else:
             try:
                 expected, _ = invoke(RefSolution, method, args, params, ret_ann, ref_ns, declared)
+                answers = [expected]
             except Unsupported as exc:
                 report["ok"] = False
                 report["unsupported"] = True
@@ -838,7 +856,7 @@ def main():
         entry["actual"] = fmt(actual)
         if logs:
             entry["stdout"] = logs
-        judge(entry, actual, expected, judged)
+        judge(entry, actual, answers)
         report["cases"].append(entry)
 
     print(json.dumps(report))
