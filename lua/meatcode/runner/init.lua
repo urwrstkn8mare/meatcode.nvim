@@ -1,6 +1,7 @@
 local answers = require("meatcode.runner.answers")
 local config = require("meatcode.config")
 local cpp = require("meatcode.runner.cpp")
+local crash = require("meatcode.runner.crash")
 local ops = require("meatcode.runner.ops")
 local providers = require("meatcode.providers")
 local util = require("meatcode.util")
@@ -366,32 +367,60 @@ local function debugger_backtrace(cmd, dir, timeout_ms, cb)
   end)
 end
 
---- Complete a failed run, including an LLDB backtrace for a C++ crash.
+--- The 0-based case a failed harness had started last (it announces each
+--- with `CASE <n>` on stderr), or nil when it died before the first.
+local function crashed_case(stderr)
+  local last = nil
+  for idx in (stderr or ""):gmatch("CASE (%d+)") do
+    last = tonumber(idx)
+  end
+  return last
+end
+
+--- Complete a failed run. A crash while a test case was running is reported
+--- against that case and its input: what went wrong (from a sanitizer, libc++
+--- or assert() report when there is one, saved whole to `crash.log`), where in
+--- the solution, the calls that led there and what it printed. Without a
+--- report that locates it, a C++ crash gets an LLDB backtrace instead.
 ---@param res vim.SystemCompleted
 ---@param cmd string[]
 ---@param dir string
 ---@param timeout_ms integer
 ---@param debug_crash boolean|nil
+---@param cases string[]
 ---@param cb fun(result: meatcode.RunResult)
-local function finish_failure(res, cmd, dir, timeout_ms, debug_crash, cb)
-  local last = nil
-  for idx in (res.stderr or ""):gmatch("CASE (%d+)") do
-    last = tonumber(idx)
-  end
+local function finish_failure(res, cmd, dir, timeout_ms, debug_crash, cases, cb)
+  local last = crashed_case(res.stderr)
 
-  local msg = process_failure(res)
+  local report = crash.parse(without_shim_noise(res.stderr or ""))
+  local msg = report and crash.summary(report) or process_failure(res)
+  local details
+  if report then
+    util.write_file(dir .. "/crash.log", res.stderr or "")
+    details = crash.describe(report, dir)
+    details.what = report.what
+    details.report = dir .. "/crash.log"
+  elseif last then
+    local first, rest = msg:match("^([^\n]*)\n(.*)$")
+    details = { what = first or msg, output = rest and vim.trim(rest) or nil }
+  end
   if last then
+    details.case = last + 1
+    details.input = cases[last + 1]
     msg = string.format("test case %d: %s", last + 1, msg)
   end
+  local result = { ok = false, error = msg, crash = details, cases = {} }
 
-  if not debug_crash or not res.signal or res.signal == 0 or res.signal == 15 or res.signal == 9 then
-    return cb(summarize({ ok = false, error = msg, cases = {} }))
+  local located = report and report.at
+  if located or not debug_crash or not res.signal or res.signal == 0 or res.signal == 15 or res.signal == 9 then
+    return cb(summarize(result))
   end
   debugger_backtrace(cmd, dir, timeout_ms, function(backtrace)
     if backtrace then
-      msg = msg .. "\n\nbacktrace:\n" .. backtrace
+      result.error = result.error .. "\n\nbacktrace:\n" .. backtrace
+      if result.crash then result.crash.backtrace = backtrace end
     end
-    cb(summarize({ ok = false, error = msg, cases = {} }))
+    cb(summarize(result))
   end)
 end
 
@@ -485,9 +514,9 @@ function M.parallelism(case_count)
 end
 
 --- Run independent case shards concurrently, then restore stable case order.
-local function execute(cmd, dir, case_count, cb, debug_crash, untrusted)
+local function execute(cmd, dir, cases, cb, debug_crash, untrusted)
   local timeout_ms = (config.options.runner.time_limit or 10) * 1000
-  local shards = parallelism(case_count)
+  local shards = parallelism(#cases)
   local commands = {}
   for shard = 0, shards - 1 do
     local shard_cmd = vim.deepcopy(cmd)
@@ -507,14 +536,15 @@ local function execute(cmd, dir, case_count, cb, debug_crash, untrusted)
         local report = decode_report(res.stdout or "")
         if report then
           table.insert(reports, report)
-        elseif not failure then
+        elseif not failure or (crashed_case(res.stderr) or math.huge) < (crashed_case(failure.res.stderr) or math.huge) then
+          -- Several workers may fail; report the earliest case, as a judge would.
           failure = { res = res, cmd = command.cmd, sandboxed = command.sandboxed }
         end
         pending = pending - 1
         if pending > 0 then return end
         if failure then
           return finish_failure(failure.res, failure.cmd, dir, timeout_ms,
-            debug_crash and shards == 1 and not failure.sandboxed, cb)
+            debug_crash and shards == 1 and not failure.sandboxed, cases, cb)
         end
 
         local merged = { ok = true, cases = {}, parallelism = shards }
@@ -588,7 +618,7 @@ local function run_python(problem_id, code, meta, cases, cb, oracle, answer_list
   table.insert(py, dir)
   table.insert(py, "function")
   table.insert(py, oracle)
-  execute(py, dir, #cases, cb, false, meta._untrusted_user or oracle == "reference")
+  execute(py, dir, cases, cb, false, meta._untrusted_user or oracle == "reference")
 end
 
 --- Design problems: normalise the call sequence, then replay it in the harness.
@@ -627,7 +657,7 @@ local function run_python_class(problem_id, code, meta, cases, cb, mode, oracle,
   table.insert(py, dir)
   table.insert(py, mode)
   table.insert(py, oracle)
-  execute(py, dir, #cases, cb, false, meta._untrusted_user or oracle == "reference")
+  execute(py, dir, cases, cb, false, meta._untrusted_user or oracle == "reference")
 end
 
 local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle, answer_lists)
@@ -702,7 +732,7 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle, answer_l
         end
         return fail(cb, msg)
       end
-      execute({ bin, dir }, dir, #cases, cb, true, untrusted)
+      execute({ bin, dir }, dir, cases, cb, true, untrusted)
     end)
   end)
 end
@@ -771,7 +801,7 @@ local function run_checker(problem_id, checker, cases, outputs, cb, scope)
   local py = vim.deepcopy(config.options.runner.python.cmd)
   table.insert(py, dir .. "/checker.py")
   table.insert(py, dir)
-  execute(py, dir, #cases, cb, false, true)
+  execute(py, dir, cases, cb, false, true)
 end
 
 -- ------------------------------------------------------------ oracle selection

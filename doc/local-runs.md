@@ -244,8 +244,14 @@ stays within the allocated capacity. On Linux the sanitizers need GCC's
 `libasan`/`libubsan` or Clang's runtime; drop the `-fsanitize` flags from
 `runner.cpp.cmd` if your toolchain lacks them.
 
-A sanitizer or libc++ report is shown as the run's error, after the number of
-the visible test case that was running.
+A crash is reported against the test case that was running, with its input:
+what went wrong, the line of your solution where it happened (with the source
+line, plus the column for undefined behaviour), the calls in your code that led
+there, where the heap memory involved was allocated (and freed, for a
+use-after-free), and the last 40 lines your solution printed before it died.
+The complete report is saved to `crash.log` in the run's scratch directory,
+whose path the panel shows. When several cases crash, the earliest is reported;
+a timeout is reported against its case the same way.
 
 Without the sanitizers (a `runner.cpp.cmd` of your own), a crash keeps its
 signal number and gets a plain-English diagnosis where one is known —

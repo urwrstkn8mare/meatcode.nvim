@@ -129,14 +129,30 @@ function M.render_run(buf, result)
   end
 
   if not result.ok then
-    if result.unsupported then
-      push(lines, spans, "  Cannot run this problem locally", "MeatCodeWarn")
+    local c = result.crash
+    if c then
+      push(lines, spans, c.case and string.format("  ✗ Case %d: %s", c.case, c.what) or ("  ✗ " .. c.what),
+        "MeatCodeFail")
+      push(lines, spans, "")
+      block(lines, spans, "input", c.input, "MeatCodeMuted")
+      block(lines, spans, "at", c.at, "MeatCodeFail")
+      block(lines, spans, "called by", c.callers, "MeatCodeMuted")
+      block(lines, spans, "freed", c.freed, "MeatCodeMuted")
+      block(lines, spans, "allocated", c.allocated, "MeatCodeMuted")
+      block(lines, spans, "output", c.output, "MeatCodeMuted")
+      block(lines, spans, "stdout", c.stdout, "MeatCodeMuted")
+      block(lines, spans, "backtrace", c.backtrace, "MeatCodeMuted")
+      block(lines, spans, "report", c.report and vim.fn.fnamemodify(c.report, ":~"), "MeatCodeMuted")
     else
-      push(lines, spans, "  Local run failed", "MeatCodeFail")
-    end
-    push(lines, spans, "")
-    for _, l in ipairs(vim.split(result.error or "unknown error", "\n", { plain = true })) do
-      push(lines, spans, "    " .. l, "MeatCodeMuted")
+      if result.unsupported then
+        push(lines, spans, "  Cannot run this problem locally", "MeatCodeWarn")
+      else
+        push(lines, spans, "  Local run failed", "MeatCodeFail")
+      end
+      push(lines, spans, "")
+      for _, l in ipairs(vim.split(result.error or "unknown error", "\n", { plain = true })) do
+        push(lines, spans, "    " .. l, "MeatCodeMuted")
+      end
     end
   else
     local ok = result.passed == result.total

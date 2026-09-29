@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+#include <unistd.h>
+
 namespace ncrt {
 
 // ---------------------------------------------------------------- JSON value
@@ -449,6 +451,33 @@ inline std::string judge(const std::string &actual,
   return "fail";
 }
 
+// ------------------------------------------------------------------ crashes
+
+// The solution's stdout while it runs. A sanitizer report ends the process
+// before the harness can print its results, so the report's death callback
+// writes the tail of this buffer to stderr, after a
+// `CRASH STDOUT <bytes shown> <bytes total>` line, for the results panel.
+inline std::stringbuf *capturing = nullptr;
+
+inline void dumpCapture() {
+  if (!capturing) return;
+#if __cplusplus >= 202002L
+  auto out = capturing->view();  // no allocation while the process is dying
+  const char *data = out.data();
+  size_t total = out.size();
+#else
+  std::string out = capturing->str();
+  const char *data = out.data();
+  size_t total = out.size();
+#endif
+  const size_t limit = 64 * 1024;
+  size_t shown = total < limit ? total : limit;
+  char head[64];
+  int n = std::snprintf(head, sizeof head, "\nCRASH STDOUT %zu %zu\n", shown, total);
+  if (n > 0) (void)!write(2, head, (size_t)n);
+  (void)!write(2, data + (total - shown), shown);
+}
+
 }  // namespace ncrt
 
 // Defaults for AddressSanitizer and UndefinedBehaviorSanitizer, which the
@@ -464,3 +493,25 @@ extern "C" __attribute__((used, visibility("default"))) const char *__asan_defau
 extern "C" __attribute__((used, visibility("default"))) const char *__ubsan_default_options() {
   return "halt_on_error=1:print_stacktrace=1";
 }
+
+#if defined(__SANITIZE_ADDRESS__)
+#define NCRT_SANITIZED 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(undefined_behavior_sanitizer)
+#define NCRT_SANITIZED 1
+#endif
+#endif
+
+#ifdef NCRT_SANITIZED
+extern "C" void __sanitizer_set_death_callback(void (*callback)(void));
+#endif
+
+namespace ncrt {
+
+inline void installCrashHooks() {
+#ifdef NCRT_SANITIZED
+  __sanitizer_set_death_callback(dumpCapture);
+#endif
+}
+
+}  // namespace ncrt

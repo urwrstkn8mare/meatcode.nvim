@@ -200,7 +200,10 @@ round-tripping the input through both halves, which needs no oracle at all.
 C++ builds like LeetCode's judge: -O2 with AddressSanitizer, plus
 UndefinedBehaviorSanitizer and libc++ debug hardening, so an out-of-bounds
 index, use-after-free, null dereference, signed overflow or invalid sort
-comparator stops a local run as it would a submission.
+comparator stops a local run as it would a submission. A crash is reported
+against the test case that was running: its input, what went wrong, the line
+of your solution and the calls that led there, what it printed last, and the
+path of the full sanitizer report (crash.log).
 
 Provider solutions and checkers are remote code. They run separately from your
 solution: oracle validation, checker grading and first-time per-case output

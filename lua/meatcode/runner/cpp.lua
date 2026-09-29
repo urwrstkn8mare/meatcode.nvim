@@ -174,6 +174,7 @@ static std::string readFile(const std::string &path) {
 }
 
 int main(int argc, char **argv) {
+  ncrt::installCrashHooks();
   std::string dir = argc > 1 ? argv[1] : ".";
   size_t shard = argc > 2 ? std::stoull(argv[2]) : 0;
   size_t stride = argc > 3 ? std::stoull(argv[3]) : 1;
@@ -213,6 +214,7 @@ int main(int argc, char **argv) {
       if (!answers.empty()) expected = answers[0];
       std::ostringstream cap;
       std::streambuf *saved = std::cout.rdbuf(cap.rdbuf());
+      ncrt::capturing = cap.rdbuf();
       auto t0 = std::chrono::steady_clock::now();
       try {
 %s
@@ -225,6 +227,7 @@ int main(int argc, char **argv) {
       }
       auto t1 = std::chrono::steady_clock::now();
       std::cout.rdbuf(saved);
+      ncrt::capturing = nullptr;
       elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
       logs = cap.str();
 
@@ -452,6 +455,7 @@ static std::string readFile(const std::string &path) {
 }
 
 int main(int argc, char **argv) {
+  ncrt::installCrashHooks();
   std::string dir = argc > 1 ? argv[1] : ".";
   size_t shard = argc > 2 ? std::stoull(argv[2]) : 0;
   size_t stride = argc > 3 ? std::stoull(argv[3]) : 1;
@@ -489,6 +493,7 @@ int main(int argc, char **argv) {
       if (!answers.empty()) expected = answers[0];
       std::ostringstream cap;
       std::streambuf *saved = std::cout.rdbuf(cap.rdbuf());
+      ncrt::capturing = cap.rdbuf();
       auto t0 = std::chrono::steady_clock::now();
       try {
         actual = replay<usersol::%s>(ops);
@@ -501,6 +506,7 @@ int main(int argc, char **argv) {
       }
       auto t1 = std::chrono::steady_clock::now();
       std::cout.rdbuf(saved);
+      ncrt::capturing = nullptr;
       elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
       logs = cap.str();
 
