@@ -87,12 +87,44 @@ function M.running(buf, what)
   show(buf, { "", "  " .. what .. "…", "" }, { { 1, 0, 40, "MeatCodeMuted" } })
 end
 
+--- First line of an error blob.
+local function headline(value)
+  return has_text(value) and tostring(value):match("^[^\n]*") or ""
+end
+
+--- What the cloud oracle did for this run, if anything.
+local function cloud_summary(lines, spans, result)
+  local cloud = result.cloud
+  if type(cloud) ~= "table" then return end
+  local label = providers.get(cloud.provider).label
+  if cloud.state == "skipped" then
+    push(lines, spans, "  " .. label .. " test run cancelled: every output matched a cached answer",
+      "MeatCodeMuted")
+  elseif cloud.state == "unavailable" then
+    push(lines, spans, "  " .. label .. " test run unavailable: " .. headline(cloud.error), "MeatCodeWarn")
+  elseif cloud.only then
+    push(lines, spans, "  Ran on " .. label .. "'s judge: " .. cloud.only, "MeatCodeWarn")
+  elseif cloud.state == "judged" then
+    local learned = tonumber(cloud.learned) or 0
+    push(lines, spans, string.format("  %s test run settled %d case(s)%s", label, cloud.judged or 0,
+      learned > 0 and string.format(" · cached %d new answer(s)", learned) or ""), "MeatCodeMuted")
+  end
+end
+
 --- Local run results (from the harness).
 function M.render_run(buf, result)
   local lines, spans = {}, {}
   push(lines, spans, "")
   if result.oracle_stage then
     push(lines, spans, "  Oracle: " .. (runner.describe_result(result) or result.oracle_stage), "MeatCodeMuted")
+    cloud_summary(lines, spans, result)
+    if has_text(result.checker_error) then
+      push(lines, spans, "  openleetcode checker failed: " .. headline(result.checker_error), "MeatCodeWarn")
+    end
+    if result.rejected then
+      push(lines, spans, "  " .. result.rejected .. " contradicted the judge and was rejected; revalidating",
+        "MeatCodeWarn")
+    end
     push(lines, spans, "")
   end
 
@@ -133,18 +165,29 @@ function M.render_run(buf, result)
       push(lines, spans,
         string.format("  %-6s Case %d%s", label, c.index + 1, timing), group)
 
+      local cloud_label = result.cloud and providers.get(result.cloud.provider).label or "the judge"
       if c.status == "pass_unordered" then
         push(lines, spans, "         (matched, but element order differs)", "MeatCodeWarn")
       elseif c.status == "no_oracle" then
         push(lines, spans, "         (expected: N/A — no known answer for this input)", "MeatCodeMuted")
       end
+      if c.judged_by == "cloud" and not (result.cloud and result.cloud.only) then
+        push(lines, spans, "         (verdict from " .. cloud_label .. "'s test run)", "MeatCodeMuted")
+      elseif c.judged_by == "checker" and c.status ~= "pass" then
+        push(lines, spans, "         (rejected by the openleetcode checker)", "MeatCodeMuted")
+      elseif has_text(c.no_verdict) then
+        push(lines, spans, "         (" .. c.no_verdict .. ")", "MeatCodeWarn")
+      end
 
-      if c.status ~= "pass" then
+      local differs = has_text(c.expected) and has_text(c.actual) and c.expected ~= c.actual
+      if c.status ~= "pass" or (c.judged_by == "cloud" and differs) then
         block(lines, spans, "input", c.input, "MeatCodeMuted")
         block(lines, spans, "expected", c.expected, "MeatCodeMuted")
-        block(lines, spans, "actual", c.actual, "MeatCodeFail")
+        block(lines, spans, "actual", c.actual, c.status == "pass" and "MeatCodeMuted" or "MeatCodeFail")
+        block(lines, spans, "judge ran", c.cloud_actual, "MeatCodeMuted")
         block(lines, spans, "error", c.error, "MeatCodeFail")
       end
+      block(lines, spans, "judge", c.cloud_error, "MeatCodeWarn")
       block(lines, spans, "stdout", c.stdout, "MeatCodeMuted")
       push(lines, spans, "")
     end

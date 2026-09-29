@@ -1,5 +1,6 @@
 local providers = require("meatcode.providers")
 local problem_catalog = require("meatcode.catalog.problems")
+local openleetcode = require("meatcode.api.openleetcode")
 local config = require("meatcode.config")
 local description = require("meatcode.ui.description")
 local hl = require("meatcode.ui.highlight")
@@ -157,9 +158,16 @@ local ORACLE_STAGES = { "reference", "editorial", "community" }
 
 --- Build stage-major candidates. Provider preference only breaks ties inside a
 --- stage: a NeetCode reference therefore beats a preferred LeetCode editorial.
+--- NeetCode's `complexTestCases` (output that is not compared verbatim) is
+--- carried over whichever provider serves the statement.
 local function merge_oracles(base, metas, order, lang)
   base.oracle_candidates = {}
   base.oracle_answers = {}
+  for _, provider_name in ipairs(order) do
+    if metas[provider_name] and metas[provider_name].complexTestCases == true then
+      base.complexTestCases = true
+    end
+  end
   for _, stage in ipairs(ORACLE_STAGES) do
     local candidates = {}
     for _, provider_name in ipairs(order) do
@@ -269,11 +277,48 @@ local function test_cases(s)
   return tests.read(s.path, s.meta.custom_test_cases)
 end
 
+--- The submit provider's test run, as the runner's cloud oracle, or nil when
+--- that judge cannot take this problem. The judge's own metadata (argument
+--- labels, internal ids, starter shapes) comes from the provider cache.
+local function cloud_oracle(s)
+  local name = s.submit_provider
+  local backend = providers.get(name)
+  if not backend or not backend.test then return nil end
+  if not providers.available(s.problem, name)
+    and not (name == "lintcode" and providers.available(s.problem, "leetcode")) then
+    return nil
+  end
+  return {
+    provider = name,
+    test = function(code, cases, cb)
+      local cancelled, stop = false, nil
+      fetch_provider_meta(s.problem, name, s.lang, function(err, meta)
+        if cancelled then return end
+        if err or not meta then
+          return cb(err or ("no " .. backend.label .. " metadata for this problem"), nil)
+        end
+        stop = backend.test(s.problem, meta, code, s.lang, cases, cb)
+      end)
+      return function()
+        cancelled = true
+        if stop then stop() end
+      end
+    end,
+  }
+end
+
+--- The oracle description the panels show, naming the judge the cloud oracle
+--- would use.
+local function describe_oracle(s)
+  return runner.describe(providers.filename(s.problem), s.meta, s.lang,
+    cloud_oracle(s) and s.submit_provider or nil)
+end
+
 local function render_ready(s)
   local keys = config.options.keys.problem
   local submit_backend = providers.get(s.submit_provider)
-  local oracle = runner.describe(providers.filename(s.problem), s.meta, s.lang)
-  local local_note = oracle and ("Local oracle: " .. oracle .. ".")
+  local oracle = describe_oracle(s)
+  local local_note = oracle and ("Local runs: " .. oracle .. ".")
     or "No local starter is available; submit to run the hidden suite."
   s.panel = "ready"
   local entries = {
@@ -283,7 +328,7 @@ local function render_ready(s)
     { keys.test_failed, "add failed submission case" },
     { keys.reset, "reset to starter code" },
     { keys.links, "open a problem link" },
-    { keys.configure, "configure provider chains" },
+    { keys.configure, "chains & cloud oracle" },
   }
   local key_width, label_width = 0, 0
   for _, entry in ipairs(entries) do
@@ -331,7 +376,7 @@ end
 --- precompute its outputs for the current suite, so local runs never wait on
 --- provider code. A spinner appears only when something actually executes.
 local function prepare_oracle(s, on_done)
-  if not runner.oracle(s.meta, s.lang) then return end
+  if runner.oracle(s.meta, s.lang) == "cloud" then return end
   local handle
   runner.prepare(providers.filename(s.problem), s.lang, s.meta,
     tests.read(s.path, s.meta.custom_test_cases),
@@ -340,7 +385,7 @@ local function prepare_oracle(s, on_done)
         if handle then
           handle:finish(info.error
             and ("Local oracle check stopped: " .. info.error:match("^[^\n]*"))
-            or ("Local oracle: " .. runner.describe(providers.filename(s.problem), s.meta, s.lang)))
+            or ("Local runs: " .. describe_oracle(s)))
         end
         if session_alive(s) and s.panel == "ready"
           and s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
@@ -354,6 +399,28 @@ local function prepare_oracle(s, on_done)
         if handle then handle:report(message) else handle = util.progress(message) end
       end)
     end)
+end
+
+--- Look up the openleetcode checker for the open problem (by LeetCode slug)
+--- and put it at the top of the oracle chain. A fresh cache answers before
+--- the first oracle pass; a checker that arrives later triggers another pass.
+local function discover_checker(s)
+  local leetcode = type(s.problem.providers) == "table" and s.problem.providers.leetcode or nil
+  if type(leetcode) ~= "table" or not leetcode.id then return end
+  local frontend_id = leetcode.frontend_id ~= "" and leetcode.frontend_id
+    or (s.meta.provider == "leetcode" and s.meta.frontend_id) or nil
+  local pending = true
+  openleetcode.checker(leetcode.id, frontend_id, function(_, checker)
+    if not checker or (type(s.meta.checker) == "table" and s.meta.checker.source == checker.source) then
+      return
+    end
+    s.meta.checker = checker
+    if pending then return end
+    vim.schedule(function()
+      if session_alive(s) then prepare_oracle(s) end
+    end)
+  end)
+  pending = false
 end
 
 --- `code` with the Python auto-import block prepended, when the language is
@@ -595,15 +662,12 @@ function M.run()
   if s.busy then
     return util.notify("already running")
   end
-  if not runner.oracle(s.meta, s.lang) then
-    return util.err("no local oracle for this problem — submit it instead")
-  end
   save(s)
 
   local cases = test_cases(s)
   s.busy = true
   s.panel = "run"
-  results.running(s.res_buf, "Running " .. #cases .. " local test case" .. (#cases == 1 and "" or "s"))
+  results.running(s.res_buf, "Running " .. #cases .. " test case" .. (#cases == 1 and "" or "s"))
 
   runner.run(providers.filename(s.problem), current_code(s), s.lang, s.meta, cases, function(result)
     vim.schedule(function()
@@ -615,12 +679,16 @@ function M.run()
       if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
         results.render_run(s.res_buf, result)
       end
+      -- The judge contradicted the local oracle, which is now blacklisted.
+      if result.rejected and session_alive(s) then prepare_oracle(s) end
     end)
   end, function(message)
-    if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
-      results.running(s.res_buf, message)
-    end
-  end)
+    vim.schedule(function()
+      if s.busy and s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+        results.running(s.res_buf, message)
+      end
+    end)
+  end, cloud_oracle(s))
 end
 
 local function accepted(s)
@@ -638,7 +706,7 @@ end
 local function recheck_oracle(s, submission)
   submission.oracle_update = "Rechecking the local oracle against the newly learned answer…"
   prepare_oracle(s, function(info)
-    local current = runner.describe(providers.filename(s.problem), s.meta, s.lang)
+    local current = describe_oracle(s)
     if info.error then
       submission.oracle_update = "Oracle check stopped: " .. info.error:match("^[^\n]*")
     elseif info.rejected > 0 then
@@ -682,12 +750,13 @@ function M.submit()
       s.failed_input = type(submission.failed_input) == "string"
         and vim.trim(submission.failed_input) ~= "" and submission.failed_input or nil
       if s.failed_input and runner.learn(
-        providers.filename(s.problem), s.failed_input, submission.expected) then
+        providers.filename(s.problem), s.failed_input, submission.expected, backend.name) then
         -- The judge disclosed this answer. Future local runs can grade the same
-        -- input even when no executable source survives oracle selection.
+        -- input without asking the judge again.
         submission.learned = true
       end
-      if submission.learned and not submission.accepted and runner.oracle(s.meta, s.lang) then
+      if submission.learned and not submission.accepted
+        and runner.oracle(s.meta, s.lang) ~= "cloud" then
         recheck_oracle(s, submission)
       end
       s.panel = submission
@@ -1077,7 +1146,7 @@ local function keymaps(s)
     map(keys.test_failed, M.test_failed, "MeatCode: add failed submission case")
     map(keys.reset, M.reset, "MeatCode: reset to starter code")
     map(keys.links, M.links, "MeatCode: open a problem link")
-    map(keys.configure, M.configure, "MeatCode: configure provider chains")
+    map(keys.configure, M.configure, "MeatCode: configure provider chains and the cloud oracle")
     -- A problem tab is one unit: closing a split closes the tab.
     map("<C-w>c", function() M.close(s) end, "MeatCode: close problem")
     map("<C-w>q", function() M.close(s) end, "MeatCode: close problem")
@@ -1573,6 +1642,7 @@ function M.open(problem, opts)
           opening[key] = nil
           render_description(s)
           keymaps(s)
+          discover_checker(s)
           prepare_oracle(s)
           render_ready(s)
           handle:finish("Ready")

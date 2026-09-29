@@ -1,13 +1,22 @@
 local config = require("meatcode.config")
 local hl = require("meatcode.ui.highlight")
 local providers = require("meatcode.providers")
+local runner = require("meatcode.runner")
 local tabs = require("meatcode.ui.tab")
 local util = require("meatcode.util")
 
 --- Fallback-chain configurator: reorder the content chain (statement, tests,
---- starter) and the submit chain (judge) per slot. Saving persists the chains
---- as the new default for every problem opened afterwards.
+--- starter) and the submit chain (judge) per slot, and choose when the submit
+--- judge's test run (the cloud oracle) replaces local oracles. Saving persists
+--- both as the new default for every problem opened afterwards.
 local M = {}
+
+--- What each cloud-oracle setting means, in `runner.CLOUD_MODES` order.
+local CLOUD_MODE_LABEL = {
+  complex = "complex problems without an openleetcode checker",
+  always = "every problem",
+  never = "never (only when nothing local is available)",
+}
 
 local state = { buf = nil, win = nil, rows = {}, slot = "content" }
 
@@ -21,14 +30,30 @@ function M.close()
   state.win, state.buf, state.rows = nil, nil, {}
 end
 
+local function refresh_sessions()
+  local problem = require("meatcode.ui.problem")
+  if problem.refresh_chains then problem.refresh_chains() end
+end
+
 local function move(slot, from, delta)
   local chain = providers.order(slot)
   local to = from + delta
   if from < 1 or from > #chain or to < 1 or to > #chain then return end
   chain[from], chain[to] = chain[to], chain[from]
   providers.set_order(slot, chain)
-  local problem = require("meatcode.ui.problem")
-  if problem.refresh_chains then problem.refresh_chains() end
+  refresh_sessions()
+end
+
+--- Advance the cloud-oracle setting to the next mode.
+local function cycle_cloud_mode()
+  local modes, current = runner.CLOUD_MODES, runner.cloud_mode()
+  for i, mode in ipairs(modes) do
+    if mode == current then
+      runner.set_cloud_mode(modes[i % #modes + 1])
+      break
+    end
+  end
+  refresh_sessions()
 end
 
 local function render()
@@ -56,11 +81,22 @@ local function render()
   section("content", "statement, visible tests, starter code")
   section("submit", "cloud judge (WIP solution is never touched)")
 
+  table.insert(lines, "  cloud oracle")
+  table.insert(spans, { #lines - 1, 2, 2 + #"cloud oracle", "MeatCodeMuted" })
+  table.insert(lines, "  the submit judge's test run, cached answers first")
+  table.insert(spans, { #lines - 1, 2, #lines[#lines], "MeatCodeMuted" })
+  local mode_label = CLOUD_MODE_LABEL[runner.cloud_mode()]
+  local mode_line = "    replaces local oracles for: " .. mode_label
+  table.insert(lines, mode_line)
+  table.insert(spans, { #lines - 1, #mode_line - #mode_label, #mode_line, "MeatCodeKey" })
+  rows[#lines] = { setting = "cloud" }
+  table.insert(lines, "")
+
   if active then
     table.insert(lines, string.format("  ▸ in use for %s", active.name))
     table.insert(spans, { #lines - 1, 2, #lines[#lines], "MeatCodeMuted" })
   end
-  table.insert(lines, "  <C-k>/<C-j> move row · <Tab> jump slots · q closes")
+  table.insert(lines, "  <C-k>/<C-j> move row · <CR> change setting · <Tab> next section · q closes")
   table.insert(spans, { #lines - 1, 2, #lines[#lines], "MeatCodeMuted" })
 
   vim.bo[state.buf].modifiable = true
@@ -81,7 +117,7 @@ local function keymaps()
   end
   local function nudge(delta)
     local row = current()
-    if not row then return util.notify("put the cursor on a provider row") end
+    if not row or not row.slot then return util.notify("put the cursor on a provider row") end
     move(row.slot, row.index, delta)
     render()
     local target = nil
@@ -95,12 +131,29 @@ local function keymaps()
   map("K", function() nudge(-1) end, "Move provider earlier")
   map("J", function() nudge(1) end, "Move provider later")
   map("<Tab>", function()
-    local first = nil
+    local starts, seen = {}, {}
     for linenr, entry in pairs(state.rows) do
-      if entry.slot == "submit" and (not first or linenr < first) then first = linenr end
+      local section = entry.slot or entry.setting
+      if not seen[section] or linenr < seen[section] then seen[section] = linenr end
     end
-    if first then pcall(vim.api.nvim_win_set_cursor, state.win, { first, 0 }) end
-  end, "Jump to submit chain")
+    for _, linenr in pairs(seen) do table.insert(starts, linenr) end
+    table.sort(starts)
+    local cursor = vim.api.nvim_win_get_cursor(state.win)[1]
+    local target = starts[1]
+    for _, linenr in ipairs(starts) do
+      if linenr > cursor then
+        target = linenr
+        break
+      end
+    end
+    if target then pcall(vim.api.nvim_win_set_cursor, state.win, { target, 0 }) end
+  end, "Jump to next section")
+  map("<CR>", function()
+    local row = current()
+    if not row or row.setting ~= "cloud" then return util.notify("put the cursor on a setting row") end
+    cycle_cloud_mode()
+    render()
+  end, "Change setting")
   map("q", M.close, "Close chains")
   map("<Esc>", M.close, "Close chains")
 end
@@ -115,8 +168,8 @@ function M.open()
   vim.bo[state.buf].filetype = "meatcode-chains"
   tabs.name_buffer(state.buf, "provider chains")
 
-  local width = math.min(vim.o.columns - 8, 64)
-  local height = math.min(vim.o.lines - 8, 20)
+  local width = math.min(vim.o.columns - 8, 84)
+  local height = math.min(vim.o.lines - 8, 24)
   state.win = vim.api.nvim_open_win(state.buf, true, {
     relative = "editor",
     width = width,
