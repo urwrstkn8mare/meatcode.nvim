@@ -201,12 +201,13 @@ Provider solutions and checkers are remote code. They run separately from your
 solution: oracle validation, checker grading and first-time per-case output
 computation are sandboxed (cached thereafter), then your code runs alone,
 unsandboxed, against those answers. Default isolation denies network and
-home/repository access; the per-run scratch directory is the only writable
-place under your home: bubblewrap (`bwrap`) on Linux (which also limits writes
-to that directory and a private /tmp, and hides the host process table behind
-a PID namespace), Apple's `sandbox-exec` on macOS (where shared locations such
-as /tmp keep normal permissions). Missing either fails closed
-(without blacklisting any candidate) and falls through to the cloud oracle.
+home/repository access, and every write outside the per-run scratch
+directory: bubblewrap (`bwrap`) on Linux (with a private /tmp, and the host
+process table hidden behind a PID namespace), Apple's `sandbox-exec` on macOS
+(an allowlist: the toolchain and system libraries can be read and run; the
+shared temporary directories, the terminal and services such as the
+pasteboard are denied too). Missing either fails closed (without blacklisting
+any candidate) and falls through to the cloud oracle.
 `runner.sandbox = false` opts into running provider code with your full user
 permissions. Neither is a VM: the host kernel is shared and memory/process
 resources are not cgroup-limited.

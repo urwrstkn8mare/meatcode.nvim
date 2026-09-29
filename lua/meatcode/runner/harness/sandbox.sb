@@ -1,12 +1,35 @@
-; Seatbelt profile for provider-supplied reference/editorial/community code.
-; macOS has no equivalent of bubblewrap's namespaces, so this profile denies the
-; network, the home directory and external volumes, and re-allows only the
-; per-run scratch directory (WORK_DIR). Everything else runs with default
-; permissions, which matches the Linux sandbox's "shared host kernel" caveat.
+; Seatbelt profile for provider-supplied reference/editorial/community code and
+; openleetcode checkers, and for compiling it. Everything is denied unless
+; allowed below. Apple's system.sb supplies what every process needs (dyld,
+; system libraries and frameworks, a few logging services); the network, your
+; files and services such as LaunchServices and the pasteboard stay out of reach.
 (version 1)
-(allow default)
-(deny network*)
-(deny file-read* file-write* process-exec file-map-executable (subpath "/Users"))
-(deny file-read* file-write* process-exec file-map-executable (subpath (param "HOME_DIR")))
-(deny file-read* file-write* process-exec file-map-executable (subpath "/Volumes"))
+(deny default)
+(import "system.sb")
+
+(allow process-fork)
+(allow signal (target same-sandbox))
+(allow sysctl-read)
+
+; The toolchain: the /usr/bin shims, the Xcode or Command Line Tools they
+; resolve to, and package-manager prefixes an absolute runner command may name.
+(allow file-read* process-exec file-map-executable
+  (subpath "/usr") (subpath "/bin") (subpath "/opt")
+  (subpath "/Applications") (subpath "/Library/Developer") (subpath "/Library/Frameworks")
+  (subpath "/private/etc") (subpath "/private/var/select")
+  (literal "/private/var/db/xcode_select_link"))
+; realpath() stats every ancestor of those paths.
+(allow file-read-metadata
+  (literal "/") (literal "/Library") (literal "/private") (literal "/private/var")
+  (literal "/private/var/db"))
+; The shims' tool-lookup cache: without it every call costs a second. Reading
+; it is harmless; writing stays denied, since unsandboxed tools trust it.
+(allow file-read* (regex #"^/private/var/folders/[^/]+/[^/]+/T/xcrun_db$"))
+
+(allow file-read* file-write-data
+  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/fd/"))
+(allow file-read* (literal "/dev/random") (literal "/dev/urandom"))
+
+; The per-run scratch directory, which also holds TMPDIR, is the only place
+; that can be written.
 (allow file-read* file-write* process-exec file-map-executable (subpath (param "WORK_DIR")))

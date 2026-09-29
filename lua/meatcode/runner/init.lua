@@ -303,6 +303,13 @@ local function crash_diagnostic(signal)
   return diagnostics[signal]
 end
 
+--- Inside the macOS sandbox, Xcode's tool shims cannot refresh their lookup
+--- cache (it lives in the shared temporary directory) and say so on stderr,
+--- yet the tool still runs: drop those lines from anything shown.
+local function without_shim_noise(text)
+  return (text:gsub("[^\n]*couldn't create cache file '[^']*xcrun_db[^\n]*\n?", ""))
+end
+
 --- Format a terminated process result for the local-run results panel.
 ---@param res vim.SystemCompleted
 ---@return string
@@ -318,7 +325,7 @@ local function process_failure(res)
     return string.format("crashed with signal %d", res.signal)
   end
 
-  local msg = (res.stderr or ""):gsub("CASE %d+\n", "")
+  local msg = without_shim_noise(res.stderr or ""):gsub("CASE %d+\n", "")
   msg = vim.trim(msg)
   if msg == "" then
     return "the harness produced no output (exit code " .. tostring(res.code) .. ")"
@@ -423,25 +430,28 @@ local function linux_sandbox_command(cmd, dir)
   return wrapped, true
 end
 
---- macOS: `sandbox-exec` applies a Seatbelt profile that denies the network,
---- the home directory and external volumes, clears the environment, and makes
---- only the scratch directory readable and writable. There is no PID namespace
---- on macOS, so the process table stays visible; otherwise the scope matches
---- Linux. Paths need no rewriting because the process keeps the host layout.
+--- macOS: `sandbox-exec` applies a Seatbelt profile (harness/sandbox.sb) that
+--- denies everything it does not list: the toolchain and system libraries can
+--- be read and run, the scratch directory (which also holds TMPDIR) is the only
+--- place that can be written, and the network, your files and other services
+--- stay out of reach. The environment is cleared. There is no PID namespace on
+--- macOS, so the process table stays visible. Paths need no rewriting because
+--- the process keeps the host layout.
 local function macos_sandbox_command(cmd, dir)
   if vim.fn.executable("sandbox-exec") ~= 1 then
     return nil, "`sandbox-exec` is required to run provider-supplied code safely on macOS"
   end
-  local home = vim.uv.os_homedir() or "/nonexistent"
+  local tmp = util.mkdirp(dir .. "/tmp")
   local wrapped = {
     "sandbox-exec",
-    "-D", "WORK_DIR=" .. dir,
-    "-D", "HOME_DIR=" .. home,
+    -- Seatbelt matches resolved paths, so a scratch directory reached through a
+    -- symlink (/tmp is /private/tmp) must be named by its real path.
+    "-D", "WORK_DIR=" .. (vim.uv.fs_realpath(dir) or dir),
     "-f", harness_dir() .. "/sandbox.sb", "--",
     "/usr/bin/env", "-i",
     "PATH=/usr/bin:/bin",
     "HOME=/nonexistent",
-    "TMPDIR=/tmp",
+    "TMPDIR=" .. tmp,
     "LANG=C.UTF-8",
   }
   for _, arg in ipairs(cmd) do
@@ -675,7 +685,7 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle, answer_l
   vim.system(compile_cmd, { text = true, cwd = dir, timeout = 120000 }, function(res)
     vim.schedule(function()
       if res.code ~= 0 then
-        local msg = vim.trim(res.stderr or "")
+        local msg = vim.trim(without_shim_noise(res.stderr or ""))
         -- Compiler noise from our generated driver is not useful to the user;
         -- surface the diagnostics that point at their own file first.
         local own = {}

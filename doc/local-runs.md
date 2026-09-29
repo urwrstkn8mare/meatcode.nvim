@@ -243,23 +243,28 @@ Reference, editorial and community implementations and openleetcode checkers
 are remote code. They never share a process with your solution. With the
 default `runner.sandbox = true`, oracle validation, checker grading and any
 first-time computation of an oracle's output for a test case run without
-network access and without access to your home directory/repository; the
-per-run scratch directory is the only place under your home they can write.
-Those outputs go into the answer cache: known answers during validation, your
-current suite right after selection. A later local run only sandboxes the
-oracle again for cases you have since added or edited. Your own code then runs
-alone, outside the sandbox, against the cached answers. Background and
-foreground oracle work use separate scratch directories from your runs, so they
-never collide.
+network access, without access to your home directory/repository, and without
+write access anywhere but the per-run scratch directory. Those outputs go into
+the answer cache: known answers during validation, your current suite right
+after selection. A later local run only sandboxes the oracle again for cases
+you have since added or edited. Your own code then runs alone, outside the
+sandbox, against the cached answers. Background and foreground oracle work use
+separate scratch directories from your runs, so they never collide.
 
 On Linux isolation means fresh user, PID, network, IPC and mount namespaces via
 bubblewrap (`bwrap`), exposing `/usr`, the dynamic loader cache and minimal
 `/dev` read-only; the scratch directory and a private tmpfs `/tmp` are the only
 writable places. On macOS `sandbox-exec` applies a Seatbelt profile that denies
-the network, `/Users`, your home directory and `/Volumes`, re-allowing only the
-scratch directory; the rest of the filesystem keeps normal permissions, so
-shared locations such as `/tmp` stay writable, and macOS has no PID namespace,
-so the host process table stays visible. Both clear the environment.
+everything it does not list. Provider code may read and run the toolchain and
+system libraries (`/usr`, `/bin`, `/opt`, `/Applications`, `/Library/Developer`,
+`/Library/Frameworks`, `/etc`), read Xcode's tool-lookup cache so
+`/usr/bin/c++` and `/usr/bin/python3` start without a second's delay, and
+read, write and run only inside the scratch directory, which also holds
+`TMPDIR`. Everything else is denied: your home directory, `/Volumes`, the
+shared temporary directories, the terminal, the network, and services such as
+LaunchServices and the pasteboard. A toolchain installed under your home
+directory therefore cannot run provider code. macOS has no PID namespace, so
+the host process table stays visible. Both clear the environment.
 
 This materially limits ordinary malicious code, but is not a VM: it shares the
 host kernel, has no memory/cgroup quota, and compiler/interpreter/kernel
