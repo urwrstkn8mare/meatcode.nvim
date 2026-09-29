@@ -212,6 +212,7 @@ end
 function M.close()
   show_cursor()
   pcall(vim.api.nvim_del_augroup_by_name, "MeatCodeRoadmapCursor")
+  pcall(function() require("meatcode.ui.problems").close() end)
   if state.buf and pages.buf() == state.buf then pages.pop() end
   state.buf = nil
 end
@@ -305,7 +306,13 @@ function M.open()
     vim.bo[state.buf].bufhidden = "hide"
     vim.bo[state.buf].filetype = "meatcode-roadmap"
   end
-  pages.push({ id = "roadmap", buf = state.buf, title = "roadmap", on_show = render })
+  pages.push({
+    id = "roadmap",
+    buf = state.buf,
+    title = "roadmap",
+    on_show = render,
+    on_close = function() require("meatcode.ui.problems").close() end,
+  })
 
   vim.wo[0][0].wrap = false
   vim.wo[0][0].cursorline = false

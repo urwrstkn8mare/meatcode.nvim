@@ -97,17 +97,16 @@ check notifies when it starts and when it finishes, even when nothing changed.
 
 Roadmap ~
   h j k l / arrows      Move between topics
-  <CR>                  Open the selected topic
+  <CR>                  Open the selected topic (picker overlay)
   L / H                 Next / previous curated list
   ?                     Help
   q                     Close
 
-Problem list ~
+Topic picker ~
+  type                  Fuzzy-filter topic problems
   <CR>                  Open the problem
-  0, 1, …              Completion days for the selected language
-  o                     Fuzzy-pick a provider/solution/video link
-  q                     Close
-
+  <C-o> / o             Fuzzy-pick a provider/solution/video link
+  q / <Esc>             Close
 Homepage ~
   r / l / n / d         Open roadmap / finder / random / daily
   <CR>                  Open the row under the cursor; on a provider status

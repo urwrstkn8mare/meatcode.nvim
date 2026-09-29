@@ -696,6 +696,7 @@ local function accepted(s)
   util.notify(s.problem.name .. " accepted" .. (recorded and " · completion recorded" or " · already counted today"))
   pcall(render_description, s)
   pcall(function() require("meatcode.ui.roadmap").refresh() end)
+  pcall(function() require("meatcode.ui.problems").refresh() end)
   pcall(function() require("meatcode.ui.list").refresh() end)
 end
 
