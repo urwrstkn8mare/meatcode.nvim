@@ -90,6 +90,11 @@ require("meatcode").setup({
 })
 ```
 
+Provider chains and the cloud-oracle setting (when the submit judge's test run
+replaces local oracles — see [local test runs](local-runs.md#the-cloud-oracle))
+are not `setup()` options: `<leader>nc` edits both and saves them under
+`cache_dir`.
+
 ## Diagrams
 
 About a third of problems carry a diagram. With

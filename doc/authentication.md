@@ -1,7 +1,9 @@
 # Logging in
 
 Browsing and opening free problems works signed out. Submitting needs an
-account with whichever provider you submit to.
+account with whichever provider you submit to, and so does the cloud oracle:
+local runs that fall back to (or are set to use) the judge's test run go out
+with that same login — see [local test runs](local-runs.md#the-cloud-oracle).
 
 Run `:MeatCode login <provider>`, or press `<CR>` on a provider's status row on
 the homepage. Each login page walks you through getting the value, and offers a

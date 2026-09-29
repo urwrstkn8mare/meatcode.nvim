@@ -18,13 +18,14 @@ Browse the NeetCode roadmap and the merged LeetCode/NeetCode/LintCode catalog,
 solve problems in real buffers, run matching NeetCode visible cases locally,
 and submit through the first provider in the submit chain that can open them.
 
-Local runs resolve a stage-major oracle chain: provider reference solutions,
-official editorials, sanity-checked popular community solutions, then answers
-printed in statements or learned from a failed submission. The provider chain
-breaks ties inside each stage.
+Local runs resolve a stage-major oracle chain: an openleetcode checker,
+provider reference solutions, official editorials, sanity-checked popular
+community solutions, then the cloud — the submit judge's own test run,
+checked against cached answers first. The provider chain breaks ties inside
+each stage.
 
 Requires Neovim 0.10+, `curl`, and telescope.nvim. Local runs need `python3`
-and/or a C++ compiler.
+and/or a C++ compiler; openleetcode checkers always need `python3`.
 
 ==============================================================================
 2. SETUP                                                   *meatcode-setup*
@@ -120,14 +121,17 @@ Problem finder ~
   <C-o>                 Fuzzy-pick a provider/solution/video link
 
 Solving ~
-  <leader>nr            Run visible cases locally when available
+  <leader>nr            Run your cases against the selected oracle, or on the
+                        submit judge's test run (the cloud oracle)
   <leader>ns            Submit through the submit chain's judge; the verdict
                         names the provider that judged it
   <leader>nR            Reset to the content provider's starter code
   <leader>no            Fuzzy-pick a provider/solution/video link
-  <leader>nc            Reorder the content/submit fallback chains. The
-                        provider actually serving the open problem is marked
-                        with a caret, which is not always the topmost one.
+  <leader>nc            Reorder the content/submit fallback chains and choose
+                        when the cloud oracle replaces local ones (<CR> on its
+                        row). The provider actually serving the open problem
+                        is marked with a caret, which is not always the
+                        topmost one.
   <CR> or <Tab>         Statement window: toggle the hint under the cursor, or
                         follow the link under it via |vim.ui.open()|.
   q                     Close the problem (statement/results windows)
@@ -138,27 +142,47 @@ already shows the position. Set `ui.hide_cursor = false` to keep it.
 ==============================================================================
 6. LOCAL TEST RUNS                                        *meatcode-runner*
 
-Opening a problem discovers and caches the available local oracles, reporting
-each statement/provider/editorial/community request as it happens. Selection is
-stage-major: reference solution, official editorial, popular community
-solution, then statement/judge-learned answers. Provider fallback order only
-breaks ties inside one stage, so a NeetCode reference beats a preferred
+Opening a problem discovers and caches the available oracles, reporting each
+statement/provider/editorial/community request as it happens. Selection is
+stage-major: openleetcode checker, reference solution, official editorial,
+popular community solution, then the cloud oracle. Provider fallback order
+only breaks ties inside one stage, so a NeetCode reference beats a preferred
 LeetCode editorial.
 
-Executable candidates are validated in the background as soon as the problem
-opens, one at a time in that order; community candidates are ordered by
-LeetCode votes or LintCode likes and need at least one known answer. Each must
-pass every visible example with a known answer plus every judge-learned answer.
-A candidate that fails is blacklisted permanently for that problem and
-language, so later passes (reopening the problem, another provider adding
-candidates) only try candidates not yet seen. The first survivor becomes the
-oracle and immediately precomputes outputs for your current suite.
+openleetcode (github.com/therepanic/openleetcode) publishes open test manifests
+whose Python checker decides whether any output is correct for any input —
+exact even when a problem accepts several answers (Longest Palindromic
+Substring). Manifests are found by LeetCode slug and cached; checkers cover
+function problems only and always run sandboxed in Python.
 
-A local run never waits for validation: until a candidate is selected, it is
-judged by statement/learned answers alone, and an input without a known answer
-runs with expected output N/A. The next run after selection uses the oracle,
-which judges arbitrary custom inputs. When a failed submission discloses an
-answer, it is cached for that exact input and the oracle is rechecked in the
+Local candidates are validated in the background as soon as the problem opens,
+one at a time in that order; community candidates are ordered by LeetCode
+votes or LintCode likes and need at least one known answer. Each must agree
+with every known answer: statement answers and answers learned from failed
+submissions. A candidate that fails is blacklisted permanently for that
+problem and language, so later passes (reopening the problem, another provider
+adding candidates, the checker arriving) only try candidates not yet seen. The
+first survivor becomes the oracle; an executable one immediately precomputes
+outputs for your current suite.
+
+The cloud oracle is the submit judge's test run (LeetCode/NeetCode "Run",
+LintCode "Test"), logged in as for submitting. It is always cautious: the test
+run starts alongside your local run and is cancelled when every output matches
+a cached correct answer; otherwise the judge's verdict settles every case that
+did not match, so a different valid answer passes. It judges while no local
+oracle is selected, for problems that cannot run locally at all (languages
+other than Python/C++, SQL, arguments passed by reference), and when the cloud
+oracle setting in <leader>nc says so: complex problems without an openleetcode
+checker (default; NeetCode's `complexTestCases`), every problem, or never.
+When the test run fails, cases are graded against cached answers alone and say
+so; an input with no cached answer runs with expected output N/A.
+
+Every oracle feeds one answer cache per problem under
+stdpath("cache")/meatcode/known-answers/: judge answers (failed submissions,
+test runs), statement answers, and the selected local oracle's outputs, which
+are dropped when it is rejected. Inputs match by content with argument labels
+dropped. An output passes when it matches any answer for its input. When a
+failed submission discloses an answer, the local oracle is rechecked in the
 background; a failure blacklists it and advances to the next candidate.
 
 Both `function` and `class` problems run locally, in Python and C++. Supported
@@ -173,22 +197,24 @@ against the selected executable class, or compare it with a known answer list.
 Encode/decode pairs such as Serialize and Deserialize Binary Tree are judged by
 round-tripping the input through both halves, which needs no oracle at all.
 
-Provider solutions are remote code. They run separately from your solution:
-oracle validation and first-time per-case output computation are sandboxed
-(cached thereafter), then your code runs alone, unsandboxed, against those
-answers. Default isolation denies network and home/repository access, with
-only the per-run scratch directory writable: bubblewrap (`bwrap`) on Linux
-(which also hides the host process table behind a PID namespace), Apple's
-`sandbox-exec` on macOS. Missing either fails closed (without blacklisting any
-candidate) and falls through to answer-only judging.
+Provider solutions and checkers are remote code. They run separately from your
+solution: oracle validation, checker grading and first-time per-case output
+computation are sandboxed (cached thereafter), then your code runs alone,
+unsandboxed, against those answers. Default isolation denies network and
+home/repository access; the per-run scratch directory is the only writable
+place under your home: bubblewrap (`bwrap`) on Linux (which also limits writes
+to that directory and a private /tmp, and hides the host process table behind
+a PID namespace), Apple's `sandbox-exec` on macOS (where shared locations such
+as /tmp keep normal permissions). Missing either fails closed
+(without blacklisting any candidate) and falls through to the cloud oracle.
 `runner.sandbox = false` opts into running provider code with your full user
 permissions. Neither is a VM: the host kernel is shared and memory/process
 resources are not cgroup-limited.
 
 Problems that cannot be reproduced locally — SQL, and anything encoding
-arguments by reference such as clone-graph's adjacency list — say so plainly
-and direct you to <leader>ns, which submits through the cloud judge. C++
-additionally cannot take vector<Interval>, which Python handles.
+arguments by reference such as clone-graph's adjacency list — run entirely on
+the submit judge's test run. C++ additionally cannot take vector<Interval>,
+which Python handles.
 
 Use <leader>nt to add/remove local cases in an editor. Save with :w and close
 with :q. Local runs also save pending edits. The full suite is stored beside
@@ -197,7 +223,7 @@ legacy .tests extras. An empty suite runs no cases; delete the .cases file to
 restore the defaults. Changes affect local runs only.
 
 Use <leader>na to add and save the latest failed submission input. Duplicate
-inputs are skipped; a disclosed expected output is cached automatically.
+inputs are skipped; a disclosed expected output joins the answer cache.
 
 Legacy extra test cases can be added in a file next to your solution named
 `<solution-file>.tests`, with cases separated by a line containing `---`: >

@@ -153,6 +153,35 @@ A submission is finished when `judge_finished`/`judgeFinished` is true. The
 verdict names arrive in either snake_case or camelCase, so the adapter reads
 both.
 
+## Test runs ("Test")
+
+The editor's "Test" button — which the cloud oracle uses — is the same POST
+with `is_test_submission: true` and one `input` (the arguments, one per line,
+in LintCode's own encoding: `{1,2,#}` trees, `1->2->null` linked lists). It is
+judged against LintCode's solution and not recorded as a submission:
+
+```
+POST https://apiv1.lintcode.com/new/api/submissions/
+{"is_test_submission": true, "problem_id": 200, "language": "cpp",
+ "source": 99, "input": "\"ababd\"", "code": "..."}
+-> {"data": {"id": 6661432}}
+
+GET https://apiv1.lintcode.com/new/api/submissions/refresh/?id=<id>&is_test_submission=true
+{"judge_finished": true, "judge_status": "failed", "status": "Wrong Answer",
+ "input": "<pre><code>\"ababd\"</code></pre>",
+ "output": "<pre><code>\"bab\"</code></pre>",
+ "expected": "<pre><code>\"aba\"</code></pre>",
+ "stdout": "<pre><code>...</code></pre>", "compile_info": "", "error_message": ""}
+```
+
+There is one test-run slot per account and problem: every POST answers with
+the same id, and the slot takes the new `input` at once while still showing
+the previous run's finished verdict until the judge picks the new run up. The
+adapter only accepts a finished result for its own input, after seeing the
+judge restart or once 8 seconds have passed — the delay the web editor itself
+waits before its first poll. LintCode compares exactly: problem 200 promises a
+unique longest palindrome, so a tied answer is a "Wrong Answer" there.
+
 ## Submission history
 
 ```

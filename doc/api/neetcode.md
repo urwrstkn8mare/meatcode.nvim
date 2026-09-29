@@ -160,6 +160,35 @@ Submission responses:
 }
 ```
 
+Run responses (`runCodeFunctionHttp`, the editor's "Run", which the cloud
+oracle uses) are a list with one Judge0-style result per test case, in order:
+
+```jsonc
+[{
+  "status": {"id": 3, "description": "Accepted"},   // or "Wrong Answer"
+  "correct_test_case_count": 1, "test_case_count": 1,
+  "stderr": "", "compile_output": null,
+  "last_executed_test_case": {
+    "input": "s=\"ababd\"",
+    "expected_output": "\"bab\"", "user_output": "\"bab\"", "user_logs": ""
+  }
+}]
+```
+
+The verdict comes from NeetCode's checker: on a problem with several valid
+answers a different one is "Accepted", and `expected_output` then echoes the
+accepted output rather than NeetCode's own. A crash still reports
+"Wrong Answer", with the traceback in `stderr` and an empty `user_output`.
+`testCases` must be labelled the way NeetCode's examples are
+(`name=value`, one per line; design cases on one interleaved line). At most
+four cases fit in one run — five answer "Invalid number of test cases." — and
+back-to-back runs meet "Rate limit exceeded. Please try again in a moment."
+
+`complexTestCases: true` in a problem's metadata marks output NeetCode does not
+compare verbatim: "any order" results and problems with several valid answers
+(Longest Palindromic Substring, Course Schedule II, Foreign Dictionary). The
+local runner defaults to the cloud oracle for those.
+
 ## The problem catalog
 
 The roadmap grouping (`pattern`) and curated-list membership

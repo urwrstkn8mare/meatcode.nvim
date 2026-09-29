@@ -51,9 +51,10 @@ class Solution:
 
 ## Guarantees
 
-- A local run and a submission both see your solution with the block removed
-  — never anything beyond what you wrote. `lua/meatcode/runner/python_prelude.lua`
-  is the single strip point both flow through.
+- A local run, a judge test run (the cloud oracle) and a submission all see
+  your solution with the block removed — never anything beyond what you wrote.
+  `lua/meatcode/runner/python_prelude.lua` is the single strip point they all
+  flow through.
 - Resetting to starter code (`<leader>nR`) re-inserts the block; it is
   re-derived from the starter each time, never hand-maintained.
 - The block only ever appears when something in the starter looks like it

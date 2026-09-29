@@ -203,3 +203,47 @@ suite.
 `submissionDetails(submissionId)` returns the stored verdict afterwards
 (`statusCode`, `statusDisplay`, `aiJudgeMessage`); both check endpoints answer
 `{"state": "PENDING"}` for the judge once its result expires.
+
+## Test runs ("Run")
+
+The cloud oracle uses the editor's "Run": your code against custom inputs,
+graded against LeetCode's own solution with the problem's checker, and never
+recorded as a submission.
+
+```
+POST https://leetcode.com/problems/<slug>/interpret_solution/
+Referer: https://leetcode.com/problems/<slug>/
+
+{"lang": "python3", "question_id": "<internal questionId>",
+ "typed_code": "...", "data_input": "\"babad\"\n\"cbbd\""}
+-> {"interpret_id": "runcode_1790600217.557905_FfJzBZvk05", "test_case": "..."}
+```
+
+`data_input` is every case's arguments, one per line, back to back; LeetCode
+splits them by the method's parameter count. Design cases use the two-line
+`names` / `args` layout. Poll the legacy check endpoint until `state` is
+`SUCCESS`:
+
+```jsonc
+GET https://leetcode.com/submissions/detail/<interpret_id>/check/
+
+{"state": "SUCCESS",
+ "status_code": 10,                          // your code ran; 15 runtime error,
+                                             // 20 compile error, 14 time limit
+ "code_answer": ["\"aba\"", "\"bb\"", ""],   // your outputs, padded with ""
+ "expected_code_answer": ["\"bab\"", "\"bb\"", ""],
+ "compare_result": "11",                     // per case, the checker's verdict
+ "correct_answer": true,
+ "std_output_list": ["", "", ""],
+ "runtime_error": "...", "full_runtime_error": "...",
+ "compile_error": "...", "full_compile_error": "...",
+ "expected_status_code": 10}                 // LeetCode's own solution ran
+```
+
+`status_msg` "Accepted" here only means the code ran; `compare_result` is the
+verdict, and it comes from the checker: `"aba"` against an expected `"bab"` for
+Longest Palindromic Substring is a `1`. On a runtime error `code_answer` stops
+at the failing case while `expected_code_answer` still covers every input.
+
+Runs fired within a second or two of each other answer HTTP 429, and bursts can
+meet Cloudflare's "Just a moment…" page (HTTP 403).

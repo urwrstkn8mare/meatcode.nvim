@@ -7,7 +7,7 @@ a merged catalog, solve/test locally, submit to any of the three.
 
 ## Features
 
-- Test locally (fast) against a sandboxed reference 'oracle' solution ([how](doc/local-runs.md)).
+- Test locally (fast) against an [openleetcode](https://github.com/therepanic/openleetcode) checker or a sandboxed reference 'oracle' solution, falling back to the judge's own test run — which also settles problems with more than one right answer ([how](doc/local-runs.md)).
 - Editable test cases (can also take from failed submissions) ([more](doc/local-runs.md)).
 - C++ autocomplete sees exactly the types each problem defines, via a generated per-problem header ([why](doc/cpp.md)).
 - Statements, tests, starter code and submissions fall through a reorderable chain across all 3 providers.
@@ -20,10 +20,12 @@ a merged catalog, solve/test locally, submit to any of the three.
 - Neovim 0.10+ and `curl`
 - [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim) for the
   problem finder
-- `python3` and/or a C++ compiler for local test runs
+- `python3` and/or a C++ compiler for local test runs (`python3` also runs
+  openleetcode checkers)
 - [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) on Linux or
   Apple's built-in `sandbox-exec` on macOS to sandbox provider-supplied
-  reference/editorial/community oracles (your solution runs separately)
+  reference/editorial/community oracles and checkers (your solution runs
+  separately)
 - optional: [image.nvim](https://github.com/3rd/image.nvim) for inline diagrams
 - optional: [fidget.nvim](https://github.com/j-hui/fidget.nvim) for spinners
   on long-running steps (opening a problem, checking other providers for a
@@ -32,7 +34,8 @@ a merged catalog, solve/test locally, submit to any of the three.
   configure on meatcode's side. Without it (or with any other notifier),
   everything still works through plain `vim.notify`.
 
-Only C++ and Python are supported today; PRs for more languages welcome.
+Only C++ and Python run locally today; other languages run on the submit
+judge's test run. PRs for more languages welcome.
 
 ## Install
 
@@ -103,13 +106,13 @@ first, saving its code, the same as `q` would.
 
 | Key | Action |
 | --- | --- |
-| `<leader>nr` | Run the test cases locally |
+| `<leader>nr` | Run the test cases (locally, or on the judge's test run) |
 | `<leader>ns` | Submit |
 | `<leader>nt` | Edit the local test cases |
 | `<leader>na` | Add the last failed submission input as a case |
 | `<leader>nR` | Reset the solution to the starter code |
 | `<leader>no` | Open a provider/solution/video link |
-| `<leader>nc` | Reorder the content/submit provider chains |
+| `<leader>nc` | Reorder the provider chains; choose when the cloud oracle judges |
 | `<CR>`/`<Tab>` | Open the hint, link or diagram under the cursor |
 | `q` | Close |
 
