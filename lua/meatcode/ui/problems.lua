@@ -170,6 +170,9 @@ local function refresh()
   if state.picker.layout and state.picker.layout.prompt and state.picker.layout.prompt.border then
     pcall(function() state.picker.layout.prompt.border:change_title(prompt_title) end)
   end
+  -- Only background refreshes keep the current row selected; typing must
+  -- reselect the top match. Restored to "reset" in on_complete.
+  state.picker.selection_strategy = "follow"
   state.picker:refresh(entries(modules), { reset_prompt = false })
 end
 
@@ -272,7 +275,7 @@ function M.open(pattern, list)
     previewer = false,
     initial_mode = "insert",
     sorting_strategy = "ascending",
-    selection_strategy = "follow",
+    selection_strategy = "reset",
     layout_strategy = "vertical",
     layout_config = {
       prompt_position = "top",
@@ -283,7 +286,12 @@ function M.open(pattern, list)
         return math.min(max_lines - 4, math.max(12, math.floor(max_lines * 0.65)))
       end,
     },
-    on_complete = { on_move },
+    on_complete = {
+      function()
+        if state.picker then state.picker.selection_strategy = "reset" end
+      end,
+      on_move,
+    },
     attach_mappings = function(prompt_buf, map)
       state.prompt_buf = prompt_buf
 

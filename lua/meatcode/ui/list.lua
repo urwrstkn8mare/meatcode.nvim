@@ -161,6 +161,9 @@ local function refresh()
   if state.picker.layout and state.picker.layout.prompt and state.picker.layout.prompt.border then
     state.picker.layout.prompt.border:change_title(prompt_title)
   end
+  -- Background refreshes keep the current row selected; typing reselects the
+  -- top match. Restored to "reset" in on_complete.
+  state.picker.selection_strategy = "follow"
   state.picker:refresh(entries(modules), { reset_prompt = false })
 end
 
@@ -242,17 +245,21 @@ local function open_picker(query)
     default_text = vim.trim(query or ""),
     initial_mode = "insert",
     sorting_strategy = "ascending",
-    -- Keep whatever row is currently selected selected across refreshes
-    -- (default "reset" jumps to the top on every re-sort) -- paired with
-    -- entry_cache above so a background availability probe completing
-    -- doesn't yank the cursor out from under you while you're browsing.
-    selection_strategy = "follow",
+    -- "reset" selects the top match as you type; `refresh` temporarily
+    -- switches to "follow" so background availability probes don't yank
+    -- the cursor away from the row you're browsing.
+    selection_strategy = "reset",
     layout_strategy = "vertical",
     layout_config = { width = 9999, height = 9999, prompt_position = "top" },
     -- A completion callback runs after every async find/filter pass,
     -- including the ones typing triggers -- covers the selection changing
     -- without a `move_selection_*` action ever firing (see `on_move`).
-    on_complete = { on_move },
+    on_complete = {
+      function()
+        if state.picker then state.picker.selection_strategy = "reset" end
+      end,
+      on_move,
+    },
     -- Blank borderchars (not `border = false`) keep this reading as a page
     -- like the roadmap, not a floating popup: a real border window still
     -- gets created, so the prompt/results titles still render -- just onto
