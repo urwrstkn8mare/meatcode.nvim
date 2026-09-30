@@ -85,6 +85,7 @@ end
 local function checker_applies(meta, lang)
   return type(meta.checker) == "table" and M.SUPPORTED[lang] == true
     and (meta.test_case_type or "function") == "function"
+    and tostring(meta.checker.judge):lower() ~= "exact"
 end
 
 --- Strongest potentially available stage. The oracle a run actually uses is
