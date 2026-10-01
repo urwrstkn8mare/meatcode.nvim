@@ -437,7 +437,11 @@ end
 --- `runner.python_prelude`) stripped back out here -- the one place every
 --- local run and every cloud submission both flow through.
 local function current_code(s)
-  local code = table.concat(vim.api.nvim_buf_get_lines(s.code_buf, 0, -1, false), "\n")
+  local lines = vim.api.nvim_buf_get_lines(s.code_buf, 0, -1, false)
+  for i, line in ipairs(lines) do
+    lines[i] = line:gsub("%s+$", "")
+  end
+  local code = table.concat(lines, "\n")
   if s.lang == "python" then code = python_prelude.strip(code) end
   return code
 end
