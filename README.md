@@ -13,15 +13,15 @@ a merged catalog, solve/test locally, submit to any of the three.
 - Statements, tests, starter code and submissions fall through a reorderable chain across all 3 providers.
 - Browse NeetCode's roadmap as an ASCII DAG.
 - Completions is counted from your real cloud submission history, merged across all 3 providers ([how](doc/progress.md)).
-- Your solution is a real file on disk, so LSP, treesitter, formatter and your keymaps just work.
+- Your solution is an autosaved file on disk, so LSP, treesitter, formatter and your keymaps just work.
 
 ## Requirements
 
 - Neovim 0.10+ and `curl`
 - [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim) for the
   problem finder
-- `python3` and/or a C++ compiler for local test runs (`python3` also runs
-  openleetcode checkers)
+- `python3`, a C++ compiler, `swiftc`, or `rustc` for the corresponding local
+  test runs (`python3` also runs openleetcode checkers)
 - [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) on Linux or
   Apple's built-in `sandbox-exec` on macOS to sandbox provider-supplied
   reference/editorial/community oracles and checkers (your solution runs
@@ -34,8 +34,9 @@ a merged catalog, solve/test locally, submit to any of the three.
   configure on meatcode's side. Without it (or with any other notifier),
   everything still works through plain `vim.notify`.
 
-Only C++ and Python run locally today; other languages run on the submit
-judge's test run. PRs for more languages welcome.
+Python, C++, Swift and Rust run locally. Other languages and unsupported
+problem signatures use the submit judge's test run. Rust needs no Cargo
+project or downloaded crates; see [local coverage](doc/local-runs.md#what-runs-locally).
 
 ## Install
 
@@ -50,7 +51,7 @@ judge's test run. PRs for more languages welcome.
     "3rd/image.nvim", -- optional
   },
   opts = {
-    lang = "python",      -- or "cpp"
+    lang = "python",      -- or "cpp", "swift", "rust"
     list = "neetcode150", -- blind75 | neetcode150 | neetcode250 | allNC
   },
 }
@@ -104,6 +105,10 @@ results underneath. Only one problem is open at a time — opening another one
 (from the finder, the roadmap, `random`, `daily`, …) closes the current one
 first, saving its code, the same as `q` would.
 
+Settings and login/logout commands update existing views immediately.
+Changing the language refreshes the catalogue and reopens the current problem
+in that language; edits are saved automatically, with no save prompt.
+
 | Key | Action |
 | --- | --- |
 | `<leader>nr` | Run the test cases (locally, or on the judge's test run) |
@@ -115,6 +120,10 @@ first, saving its code, the same as `q` would.
 | `<leader>nc` | Reorder the provider chains; choose when the cloud oracle judges |
 | `<CR>`/`<Tab>` | Open the hint, link or diagram under the cursor |
 | `q` | Close |
+
+Starting another test run cancels the current run and starts the replacement.
+Submitting during a test run cancels that run first, including its cloud test
+request. An in-flight submission is not replaced by another submission.
 
 The roadmap, list and finder each advertise their own keys on screen (`?` on
 the roadmap for the full set).
@@ -130,13 +139,28 @@ the roadmap for the full set).
   [LeetCode](doc/api/leetcode.md), [LintCode](doc/api/lintcode.md)
 - `:help meatcode`
 
+## Verification
+
+The headless integration checks launch real local runner processes and operate
+the actual Neovim UI buffers and commands:
+
+```sh
+nvim --headless -u NONE -l tests/local_runs.lua
+nvim --headless -u NONE -l tests/ui_state.lua
+MEATCODE_NO_SETUP=1 nvim --headless -u NONE -l tests/ui_state.lua
+```
+
+The runner check needs Python, Swift, Rust, and a supported sandbox. UI checks
+fixture provider responses; they do not log into real accounts. To also
+exercise the Telescope catalogue, set `MEATCODE_PICKER=1`,
+`MEATCODE_TELESCOPE` to your telescope.nvim checkout, and `MEATCODE_PLENARY`
+to your plenary.nvim checkout when running `tests/ui_state.lua`.
+
 ## TODO
 
-- When starting local run while 1 is currently running, just cancel the currently running one and start the new run.
 - Windows Sandboxing support for local solution oracle
 - Sorting and filtering in the problem list view
 - Fetch LintCode beat by % metric and render memory usage in human readable text
-- More languages (i.e. Rust)
 - Notes per problem, kept beside the solution file
 - A solved/attempted filter in the finder, driven by the shared history
 - Add a configurable minimum number of completions to count as completed (i.e. be highlighted green by this plugin)

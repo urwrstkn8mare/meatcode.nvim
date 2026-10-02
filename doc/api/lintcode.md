@@ -129,9 +129,9 @@ Rows carry `content`, `languages`/`languages_types`, `like_count`,
 `is_official` and `is_highlight`. The plugin pages to the envelope `count`.
 Because the endpoint pins highlighted rows ahead of ordinary ones, it then
 sorts the complete result by `like_count` and extracts the requested
-`[[python]]` or `[[cpp]]` sections from LintCode's multi-language fenced
-blocks. These remain untrusted candidates until they pass
-every visible case with a known expected output.
+language sections (`[[python]]`, `[[cpp]]`, `[[swift]]`, `[[rust]]`) from
+LintCode's multi-language fenced blocks. These remain untrusted candidates
+until they pass every visible case with a known expected output.
 
 ## Submitting
 

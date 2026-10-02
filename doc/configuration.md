@@ -55,6 +55,15 @@ require("meatcode").setup({
       -- Generate a .clangd beside your solutions. See doc/cpp.md.
       clangd = true,
     },
+    swift = {
+      -- {source} and {out} are substituted at build time.
+      cmd = { "swiftc", "-O", "-o", "{out}", "{source}" },
+    },
+    rust = {
+      -- {source} and {out} are substituted at build time. The local harness
+      -- uses rustc and the standard library; it does not fetch crates.
+      cmd = { "rustc", "--edition=2021", "-O", "-o", "{out}", "{source}" },
+    },
     -- Wall clock limit per test case, in seconds.
     time_limit = 10,
   },
@@ -101,6 +110,11 @@ Provider chains and the cloud-oracle setting (when the submit judge's test run
 replaces local oracles — see [local test runs](local-runs.md#the-cloud-oracle))
 are not `setup()` options: `<leader>nc` edits both and saves them under
 `cache_dir`.
+
+Changes apply to open views immediately. The submit chain and cloud mode are
+used by the next run/submission; editing the content chain reopens the current
+problem through the new chain without replacing its saved solution. Login and
+content-chain changes recheck cached catalogue access.
 
 ## Diagrams
 

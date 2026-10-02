@@ -47,9 +47,10 @@ It judges when:
 
 - no local oracle is selected yet (validation still running, or every candidate
   rejected);
-- the problem cannot run locally at all — languages other than Python and C++,
-  SQL, arguments passed by reference (`clone-graph`), C++ `vector<Interval>`.
-  Every case then runs on the judge;
+- the problem cannot run locally — languages without a local harness, SQL,
+  unsupported signatures or custom node types, arguments passed by reference
+  (`clone-graph`), or C++ `vector<Interval>`. Every case then runs on
+  the judge;
 - the **cloud oracle** setting says so. `<leader>nc` has a row for it, cycled
   with `<CR>` and saved for every problem:
   - *complex problems without an openleetcode checker* (default) — problems
@@ -139,9 +140,16 @@ oracle judges (the results panel says validation is still in progress).
 
 ## What runs locally
 
-Python and C++, for both `function` problems and `class` ("design") problems.
-Handled:
+Python, C++, Swift and Rust function problems. Python, C++, Swift and Rust also
+support `class` ("design") operation suites; encode/decode round trips are
+supported by all four harnesses. The Swift harness accepts scalar
+values, arrays and optionals, `ListNode`/`TreeNode` values and node collections.
+The Rust harness uses only `rustc` and the standard library (no Cargo or
+downloads) and accepts scalar values, nested `Vec<T>`, `ListNode` and `TreeNode`
+options, design constructors/methods, and encode/decode round trips. Unsupported
+signatures are reported explicitly rather than silently coerced.
 
+Additional detailed coverage in Python/C++ includes:
 - integers, floats, booleans, `char`, strings, and nested `vector`/`list` of
   those
 - `ListNode` and `TreeNode`, array-encoded exactly as LeetCode does — including
@@ -169,15 +177,16 @@ Handled:
 
 ## What doesn't
 
-SQL, languages other than Python and C++, and problems that encode their
-arguments **by reference** rather than by value: the adjacency list in
-`clone-graph`, the random pointers in `copy-linked-list-with-random-pointer`.
-Those cannot be faithfully rebuilt from the input, so they run entirely on the
-submit judge's test run instead of reporting a bogus diff. C++ additionally
-cannot take `vector<Interval>` (`meeting-schedule`), which Python handles.
+SQL and arguments encoded **by reference** rather than by value remain cloud
+only: the adjacency list in `clone-graph` and random pointers in
+`copy-linked-list-with-random-pointer` cannot be faithfully rebuilt from the
+input. Swift/Rust custom node types, dictionaries and unsupported signatures
+remain unsupported; those cases are reported as unsupported rather than
+fabricating a result. C++ additionally cannot take `vector<Interval>`
+(`meeting-schedule`), which Python handles.
 
-Across the NeetCode 150 that is 148/150 runnable locally in Python and 146/150
-in C++.
+The historical NeetCode 150 counts below describe the earlier Python/C++
+coverage, not a measured Swift/Rust coverage figure.
 
 When your output matches a known answer only up to ordering, the case is
 reported as passing with a note; under the cloud oracle the judge makes that
@@ -214,8 +223,8 @@ suite.
 
 ## Performance
 
-Cases are independent, so Python and C++ function, design and round-trip suites
-run in separate worker processes. `runner.parallelism = 0` (the default) uses
+Cases are independent, so all four languages' function, design and round-trip
+suites run in separate worker processes. `runner.parallelism = 0` uses
 the smaller of the case count and available CPU count; `1` is sequential and a
 larger number is an explicit worker cap. Shard reports are merged back into
 original case order, so output stays deterministic.
@@ -287,6 +296,11 @@ shared temporary directories, the terminal, the network, and services such as
 LaunchServices and the pasteboard. A toolchain installed under your home
 directory therefore cannot run provider code. macOS has no PID namespace, so
 the host process table stays visible. Both clear the environment.
+
+Compiler/interpreter names are resolved against your `PATH` before clearing the
+environment. macOS also permits metadata reads of the exact scratch-directory
+ancestors so LLVM can validate its working directory; their contents remain
+inaccessible.
 
 This materially limits ordinary malicious code, but is not a VM: it shares the
 host kernel, has no memory/cgroup quota, and compiler/interpreter/kernel

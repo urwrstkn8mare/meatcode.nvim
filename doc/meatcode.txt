@@ -24,8 +24,8 @@ community solutions, then the cloud — the submit judge's own test run,
 checked against cached answers first. The provider chain breaks ties inside
 each stage.
 
-Requires Neovim 0.10+, `curl`, and telescope.nvim. Local runs need `python3`
-and/or a C++ compiler; openleetcode checkers always need `python3`.
+Requires Neovim 0.10+, `curl`, and telescope.nvim. Local runs need `python3`,
+a C++ compiler, `swiftc`, or `rustc`; checkers always need `python3`.
 
 ==============================================================================
 2. SETUP                                                   *meatcode-setup*
@@ -82,7 +82,9 @@ The homepage, roadmap and finder share one tab: running any of the commands
 above jumps back to it and switches what it shows there, rather than opening
 another tab each time. Opening a different problem closes the open one first
 (saving its code, same as `q`); reopening the open one just focuses it. At
-most one problem tab exists at a time.
+most one problem tab exists at a time. Login/logout refreshes the homepage
+immediately, and changing `:MeatCode lang` refreshes language-filtered views
+and reopens the current problem in that language without discarding its work.
 
 Problem actions use the buffer-local mappings below instead of duplicate Ex
 commands. Accepted cloud submissions are counted in the selected language; an
@@ -121,9 +123,11 @@ Problem finder ~
 
 Solving ~
   <leader>nr            Run your cases against the selected oracle, or on the
-                        submit judge's test run (the cloud oracle)
-  <leader>ns            Submit through the submit chain's judge; the verdict
-                        names the provider that judged it
+                        submit judge's test run (the cloud oracle); repeating
+                        it replaces the foreground local run
+  <leader>ns            Submit through the submit chain's judge; this cancels
+                        a foreground local run. The verdict names the provider
+                        that judged it
   <leader>nR            Reset to the content provider's starter code
   <leader>no            Fuzzy-pick a provider/solution/video link
   <leader>nc            Reorder the content/submit fallback chains and choose
@@ -170,9 +174,10 @@ run starts alongside your local run and is cancelled when every output matches
 a cached correct answer; otherwise the judge's verdict settles every case that
 did not match, so a different valid answer passes. It judges while no local
 oracle is selected, for problems that cannot run locally at all (languages
-other than Python/C++, SQL, arguments passed by reference), and when the cloud
-oracle setting in <leader>nc says so: complex problems without an openleetcode
-checker (default; NeetCode's `complexTestCases`), every problem, or never.
+other than Python/C++/Swift/Rust, SQL, unsupported signatures or reference
+encodings), and when the cloud oracle setting in <leader>nc says so: complex
+problems without an openleetcode checker (default; NeetCode's
+`complexTestCases`), every problem, or never.
 When the test run fails, cases are graded against cached answers alone and say
 so; an input with no cached answer runs with expected output N/A.
 
@@ -184,12 +189,13 @@ dropped. An output passes when it matches any answer for its input. When a
 failed submission discloses an answer, the local oracle is rechecked in the
 background; a failure blacklists it and advances to the next candidate.
 
-Both `function` and `class` problems run locally, in Python and C++. Supported
-types are integers, floats, booleans, chars, strings, nested vectors/lists of
-those, ListNode / TreeNode (array-encoded, as on LeetCode) including lists of
-lists, and helper classes such as Interval. Problems that mutate their first
-argument and return nothing are handled, as are scalars that identify an
-existing node inside another argument.
+Both `function` and `class` problems run locally in Python, C++, Swift and Rust.
+Swift and Rust support scalars, nested arrays/Vecs, standard ListNode/TreeNode
+types, in-place mutable arguments, design methods and codec round trips.
+Rust uses only rustc and its standard library; no Cargo setup or crate fetches.
+Custom node definitions and unsupported signatures fall back to the judge.
+Python/C++ additionally cover helper classes such as Interval and their
+documented reference encodings; see doc/local-runs.md for detailed limits.
 
 Design problems (Min Stack, LRU Cache, Trie, ...) replay their call sequence
 against the selected executable class, or compare it with a known answer list.
@@ -225,8 +231,10 @@ the submit judge's test run. C++ additionally cannot take vector<Interval>,
 which Python handles.
 
 Use <leader>nt to add/remove local cases in an editor. Save with :w and close
-with :q. Local runs also save pending edits. The full suite is stored beside
-your solution as <solution-file>.cases, initially seeded with visible cases and
+with :q. Solution edits are autosaved as you type, so switching languages,
+closing the problem, or exiting Neovim preserves work without a save prompt.
+Local runs also save pending edits. The full suite is stored beside your
+solution as <solution-file>.cases, initially seeded with visible cases and
 legacy .tests extras. An empty suite runs no cases; delete the .cases file to
 restore the defaults. Changes affect local runs only.
 
