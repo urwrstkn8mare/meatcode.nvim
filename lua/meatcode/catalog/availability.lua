@@ -15,7 +15,7 @@ local util = require("meatcode.util")
 --- discovered every language every candidate supports.
 local M = {}
 
-local state = { data = nil, pending = {}, warmer = nil, listeners = {} }
+local state = { data = nil, pending = {}, warmer = nil, listeners = {}, generation = 0 }
 
 --- Cache-entry format version, bumped whenever `check`'s walled/empty
 --- determination changes in a way that could have produced a different
@@ -59,6 +59,15 @@ local function store(problem, entry)
   load()[key] = entry
   persist()
   for _, listener in ipairs(state.listeners) do pcall(listener, problem) end
+end
+
+--- Access and the provider union depend on credentials and the content chain.
+function M.invalidate()
+  state.generation = state.generation + 1
+  state.data, state.pending = {}, {}
+  persist()
+  if state.warmer and state.warmer.handle then state.warmer.handle:cancel() end
+  state.warmer = nil
 end
 
 --- The full set of languages known to be servable for `problem`, or nil if
@@ -149,11 +158,14 @@ function M.check(problem, cb)
     table.insert(state.pending[key], cb)
     return
   end
-  state.pending[key] = { cb }
+  local waiters, generation = { cb }, state.generation
+  state.pending[key] = waiters
 
   local function finish(languages, locked, err)
-    local waiters = state.pending[key]
-    state.pending[key] = nil
+    if state.pending[key] == waiters then state.pending[key] = nil end
+    if generation ~= state.generation then
+      languages, locked, err = nil, false, "catalog access changed; check again"
+    end
     for _, waiter in ipairs(waiters) do waiter(languages, locked, err) end
   end
 
@@ -180,6 +192,7 @@ function M.check(problem, cb)
   local errors = {}
   local i = 0
   local function step()
+    if generation ~= state.generation then return finish() end
     i = i + 1
     local name = candidates[i]
     if not name then
@@ -197,6 +210,7 @@ function M.check(problem, cb)
       return finish(languages, false, err)
     end
     providers.ensure_id(problem, name, function(id_err, id)
+      if generation ~= state.generation then return finish() end
       if not id then
         if id_err then table.insert(errors, name .. ": " .. id_err) end
         return step()
@@ -259,6 +273,7 @@ function M.warm(problems)
   warm.running = true
   warm.handle = util.progress("Checking catalog access & language support…")
   local function step()
+    if state.warmer ~= warm then return end
     local problem = table.remove(warm.queue, 1)
     if not problem then
       warm.running = false

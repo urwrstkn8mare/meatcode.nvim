@@ -10,6 +10,14 @@ local providers = require("meatcode.providers")
 local util = require("meatcode.util")
 
 local M = {}
+local language_generation = 0
+
+local function refresh_state(data)
+  vim.api.nvim_exec_autocmds("User", {
+    pattern = "MeatCodeStateChanged",
+    data = data,
+  })
+end
 
 --- Snippet the user runs in their browser console to obtain a Firebase refresh
 --- token. NeetCode has password sign-in disabled, so this is the only way for a
@@ -67,6 +75,27 @@ local LINTCODE_SNIPPET = [[
 
 ]]
 
+-- Commands work with defaults even when setup() was never called.
+vim.api.nvim_create_autocmd("User", {
+  group = vim.api.nvim_create_augroup("MeatCodeSharedState", { clear = true }),
+  pattern = "MeatCodeStateChanged",
+  callback = function(ev)
+    if ev.data and (ev.data.auth or ev.data.chain == "content") then
+      availability.invalidate()
+      local cat = problem_catalog.get() or problem_catalog.load()
+      if cat then availability.warm(cat.problems) end
+    end
+    if ev.data and ev.data.chain == "content" then
+      require("meatcode.ui.problem").refresh_content()
+    end
+    pcall(function() require("meatcode.ui.home").refresh(ev.data) end)
+    pcall(function() require("meatcode.ui.roadmap").refresh() end)
+    pcall(function() require("meatcode.ui.problems").refresh() end)
+    pcall(function() require("meatcode.ui.list").refresh() end)
+    pcall(function() require("meatcode.ui.problem").refresh_chains() end)
+  end,
+})
+
 function M.home()
   require("meatcode.ui.home").open()
 end
@@ -78,6 +107,7 @@ function M.roadmap(list)
         .. " (expected one of " .. table.concat(catalog.LISTS, ", ") .. ")")
     end
     config.options.list = list
+    refresh_state()
   end
   require("meatcode.ui.roadmap").open()
 end
@@ -93,6 +123,7 @@ function M.login(provider, credential)
       vim.schedule(function()
         if err then return util.err(provider .. " login failed: " .. err) end
         util.notify("logged in to " .. backend.label)
+        refresh_state({ auth = { provider = provider, logged_in = true } })
         progress.sync(function() end)
       end)
     end)
@@ -160,6 +191,7 @@ function M.logout(provider)
   end
   backend.auth.logout()
   util.notify("logged out of " .. backend.label)
+  refresh_state({ auth = { provider = provider, logged_in = false } })
 end
 
 function M.status()
@@ -173,7 +205,16 @@ function M.set_lang(name)
   if not lang_info.info[name] then
     return util.err("unknown language: " .. tostring(name))
   end
+  if config.options.lang == name then
+    return util.notify("language: " .. lang_info.name(name))
+  end
   config.options.lang = name
+  language_generation = language_generation + 1
+  local generation = language_generation
+  require("meatcode.ui.problem").switch_language(name, function()
+    return generation == language_generation
+  end)
+  refresh_state()
   util.notify("language: " .. lang_info.name(name))
 end
 
@@ -258,6 +299,7 @@ function M.daily()
 end
 
 function M.setup(opts)
+  local previous_lang = config.options.lang
   config.setup(opts)
   hl.setup()
   -- Only user of math.random (M.random's problem pick); unseeded Lua RNG is
@@ -281,6 +323,14 @@ function M.setup(opts)
       if fresh then availability.warm(fresh.problems) end
     end)
   end)
+  if previous_lang ~= config.options.lang then
+    language_generation = language_generation + 1
+    local generation = language_generation
+    require("meatcode.ui.problem").switch_language(config.options.lang, function()
+      return generation == language_generation
+    end)
+  end
+  refresh_state()
   return M
 end
 

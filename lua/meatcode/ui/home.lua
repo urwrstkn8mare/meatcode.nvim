@@ -42,6 +42,7 @@ local CODE = {
 local HINT_NS = vim.api.nvim_create_namespace("meatcode-home-hint")
 
 local state = { buf = nil, rows = {}, hints = {}, subscribed = false, auth = {} }
+local auth_generation = {}
 
 local function is_open()
   return state.buf and vim.api.nvim_buf_is_valid(state.buf) and pages.buf() == state.buf
@@ -126,7 +127,7 @@ local function provider_mix(all)
 end
 
 local function render()
-  if not is_open() then return end
+  if not (state.buf and vim.api.nvim_buf_is_valid(state.buf)) then return end
   local all = problem_catalog.get() or problem_catalog.load()
   local keys = config.options.keys.home or {}
   local win = vim.fn.bufwinid(state.buf)
@@ -261,12 +262,16 @@ local function refresh_auth_status()
   for _, backend in ipairs(providers.all()) do
     local name = backend.name
     if not backend.auth.is_logged_in() then
+      auth_generation[name] = (auth_generation[name] or 0) + 1
       state.auth[name] = nil
     elseif state.auth[name] ~= "checking" then
+      auth_generation[name] = (auth_generation[name] or 0) + 1
+      local generation = auth_generation[name]
       state.auth[name] = "checking"
       backend.auth.refresh(function(err)
-        state.auth[name] = err and { err = err } or "verified"
         vim.schedule(function()
+          if auth_generation[name] ~= generation then return end
+          state.auth[name] = err and { err = err } or "verified"
           if is_open() then render() end
         end)
       end)
@@ -352,7 +357,7 @@ function M.open()
     vim.bo[state.buf].bufhidden = "hide"
     vim.bo[state.buf].filetype = "meatcode-home"
   end
-  pages.push({ id = "home", buf = state.buf, title = "home" })
+  pages.push({ id = "home", buf = state.buf, title = "home", on_show = render })
 
   vim.wo[vim.api.nvim_get_current_win()][0].cursorline = true
   vim.bo[state.buf].modifiable = false
@@ -376,7 +381,12 @@ function M.open()
   progress.sync(function() end)
 end
 
-function M.refresh()
+function M.refresh(data)
+  local auth = data and data.auth
+  if auth and auth.provider then
+    auth_generation[auth.provider] = (auth_generation[auth.provider] or 0) + 1
+    state.auth[auth.provider] = auth.logged_in and "verified" or nil
+  end
   render()
 end
 

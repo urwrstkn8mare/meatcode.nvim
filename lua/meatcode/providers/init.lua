@@ -66,6 +66,7 @@ function M.set_order(slot, chain)
   slot = slot == "submit" and "submit" or "content"
   load_chains()[slot] = sanitize(chain)
   require("meatcode.util").write_json(chains_path(), chains)
+  vim.api.nvim_exec_autocmds("User", { pattern = "MeatCodeStateChanged", data = { chain = slot } })
   return M.order(slot)
 end
 

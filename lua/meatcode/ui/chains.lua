@@ -30,10 +30,6 @@ function M.close()
   state.win, state.buf, state.rows = nil, nil, {}
 end
 
-local function refresh_sessions()
-  local problem = require("meatcode.ui.problem")
-  if problem.refresh_chains then problem.refresh_chains() end
-end
 
 local function move(slot, from, delta)
   local chain = providers.order(slot)
@@ -41,7 +37,6 @@ local function move(slot, from, delta)
   if from < 1 or from > #chain or to < 1 or to > #chain then return end
   chain[from], chain[to] = chain[to], chain[from]
   providers.set_order(slot, chain)
-  refresh_sessions()
 end
 
 --- Advance the cloud-oracle setting to the next mode.
@@ -53,7 +48,6 @@ local function cycle_cloud_mode()
       break
     end
   end
-  refresh_sessions()
 end
 
 local function render()

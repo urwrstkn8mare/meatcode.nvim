@@ -26,8 +26,10 @@ local sessions = {}
 
 --- problem ids currently fetching metadata / seeding, so a double <CR> on the
 --- list does not open two tabs of the same question.
----@type table<string, boolean>
+---@type table<string, integer>
 local opening = {}
+local open_generation = {}
+local pending_open
 
 local function session_alive(s)
   return s and s.tab and vim.api.nvim_tabpage_is_valid(s.tab)
@@ -447,12 +449,22 @@ local function current_code(s)
 end
 
 local function save(s)
-  if s.code_buf and vim.api.nvim_buf_is_valid(s.code_buf) then
+  if s.code_buf and vim.api.nvim_buf_is_valid(s.code_buf)
+    and vim.bo[s.code_buf].modified then
     vim.api.nvim_buf_call(s.code_buf, function()
-      if vim.bo.modified then
-        vim.cmd("silent write")
-      end
+      vim.cmd("silent write")
     end)
+  end
+end
+
+local function autosave(s)
+  if not (s.code_buf and vim.api.nvim_buf_is_valid(s.code_buf)) then return end
+  local lines = vim.api.nvim_buf_get_lines(s.code_buf, 0, -1, false)
+  local ok, err = util.write_file(s.path, table.concat(lines, "\n"))
+  if ok then
+    vim.bo[s.code_buf].modified = false
+  else
+    util.err("could not autosave solution: " .. tostring(err))
   end
 end
 
@@ -632,14 +644,14 @@ local function render_description(s)
   render_images(s)
 end
 
---- Re-resolve every open session's judge after a chain edit. Content is left
---- alone: switching the statement mid-solve would orphan the WIP solution.
+--- Re-resolve the judge and ready panel without overwriting live results.
+--- Content changes reopen through refresh_content, preserving the solution file.
 function M.refresh_chains()
   for _, s in pairs(sessions) do
     if session_alive(s) then
       local chain = providers.candidates(s.problem, "submit")
       s.submit_provider = chain[1] or s.content_provider
-      if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+      if s.panel == "ready" and s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
         pcall(render_ready, s)
       end
     end
@@ -658,41 +670,52 @@ function M.test_failed()
   tests.open(s.path, s.meta.custom_test_cases, s.failed_input)
 end
 
+local function cancel_local_run(s)
+  if s.busy_kind ~= "run" then return false end
+  s.run_generation = (s.run_generation or 0) + 1
+  local cancel = s.cancel_run
+  s.cancel_run = nil
+  s.busy = false
+  s.busy_kind = nil
+  if cancel then cancel() end
+  return true
+end
+
 function M.run()
   local s = ready()
-  if not s then
-    return
-  end
-  if s.busy then
-    return util.notify("already running")
-  end
+  if not s then return end
+  if s.busy_kind == "submit" then return util.notify("already running") end
+  cancel_local_run(s)
   save(s)
 
   local cases = test_cases(s)
   s.busy = true
+  s.busy_kind = "run"
+  s.run_generation = (s.run_generation or 0) + 1
+  local generation = s.run_generation
   s.panel = "run"
   results.running(s.res_buf, "Running " .. #cases .. " test case" .. (#cases == 1 and "" or "s"))
 
-  runner.run(providers.filename(s.problem), current_code(s), s.lang, s.meta, cases, function(result)
-    vim.schedule(function()
-      -- Only cleared once the render actually lands: clearing it back in the
-      -- runner callback (before this scheduled tail runs) would let a
-      -- keypress in between start a second `runner.run` against the same
-      -- on-disk workdir while this one is still finishing.
-      s.busy = false
-      if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
-        results.render_run(s.res_buf, result)
-      end
-      -- The judge contradicted the local oracle, which is now blacklisted.
-      if result.rejected and session_alive(s) then prepare_oracle(s) end
-    end)
-  end, function(message)
-    vim.schedule(function()
-      if s.busy and s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
-        results.running(s.res_buf, message)
-      end
-    end)
-  end, cloud_oracle(s))
+  s.cancel_run = runner.run(
+    providers.filename(s.problem), current_code(s), s.lang, s.meta, cases, function(result)
+      vim.schedule(function()
+        if s.run_generation ~= generation or s.busy_kind ~= "run" then return end
+        s.cancel_run = nil
+        s.busy = false
+        s.busy_kind = nil
+        if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+          results.render_run(s.res_buf, result)
+        end
+        if result.rejected and session_alive(s) then prepare_oracle(s) end
+      end)
+    end, function(message)
+      vim.schedule(function()
+        if s.run_generation == generation and s.busy_kind == "run"
+          and s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+          results.running(s.res_buf, message)
+        end
+      end)
+    end, cloud_oracle(s))
 end
 
 local function accepted(s)
@@ -729,7 +752,8 @@ end
 function M.submit()
   local s = ready()
   if not s then return end
-  if s.busy then return util.notify("already running") end
+  if s.busy_kind == "submit" then return util.notify("already running") end
+  cancel_local_run(s)
   if not providers.available(s.problem, s.submit_provider)
     and not (s.submit_provider == "lintcode" and providers.available(s.problem, "leetcode")) then
     return util.err("this problem is unavailable on " .. providers.get(s.submit_provider).label)
@@ -738,17 +762,19 @@ function M.submit()
 
   local backend = providers.get(s.submit_provider)
   s.busy = true
+  s.busy_kind = "submit"
   s.panel = "submit"
   results.running(s.res_buf, "Submitting to " .. backend.label)
 
   backend.submit(s.problem, s.meta, current_code(s), s.lang, function(err, data)
     vim.schedule(function()
       s.busy = false
-      if not (s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf)) then
-        return
-      end
+      s.busy_kind = nil
       if err then
-        return results.render_submit_error(s.res_buf, backend.name, err)
+        if s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf) then
+          return results.render_submit_error(s.res_buf, backend.name, err)
+        end
+        return util.err(backend.label .. " submission failed: " .. err)
       end
       local submission = backend.normalize_submission(data)
       submission.provider = backend.name
@@ -764,11 +790,10 @@ function M.submit()
         and runner.oracle(s.meta, s.lang) ~= "cloud" then
         recheck_oracle(s, submission)
       end
+      if submission.accepted then accepted(s) end
+      if not (s.res_buf and vim.api.nvim_buf_is_valid(s.res_buf)) then return end
       s.panel = submission
       results.render_submit(s.res_buf, submission)
-      if submission.accepted then
-        accepted(s)
-      end
     end)
   end)
 end
@@ -910,6 +935,7 @@ end
 ---@return integer|nil tab the session's own tab, for the caller to close
 local function teardown(s)
   s.closing = true
+  cancel_local_run(s)
   pcall(clear_images, s)
   pcall(save, s)
   local tab = s.tab
@@ -1117,6 +1143,39 @@ local function discover_providers(s)
       end)
     end
   end
+end
+local function reopen(lang, guard, force)
+  local s = current_session()
+  if not s then
+    for _, candidate in pairs(sessions) do
+      if session_alive(candidate) then s = candidate; break end
+    end
+  end
+  local target = s or pending_open
+  if not target or (target.lang == lang and not force) then return false end
+  local problem = target.problem
+  local path = target.path and target.path:gsub("%.[^./]+$", "." .. lang_info.ext(lang))
+  if s then
+    save(s)
+    M.close(s)
+  end
+  local origin = not s and type(target.origin_guard) == "function" and target.origin_guard or nil
+  local function wanted()
+    return (not guard or guard()) and (not origin or origin())
+  end
+  M.open(problem, {
+    lang = lang, path = path, guard = (guard or origin) and wanted or nil,
+    origin_guard = origin or false, will_show = target.will_show,
+  })
+  return true
+end
+
+function M.switch_language(lang, guard)
+  return reopen(lang, guard, false)
+end
+
+function M.refresh_content()
+  return reopen(config.options.lang, nil, true)
 end
 
 function M.links()
@@ -1439,6 +1498,7 @@ local function seed_file(s, path, cb)
         if err or not session_alive(s) then return end
         if not (s.code_buf and vim.api.nvim_buf_is_valid(s.code_buf)) then return end
         if vim.bo[s.code_buf].modified then return end
+        if s.user_edited then return end
         local code_tabs = type(data) == "table" and (data.tabs or (data.code and { { code = data.code } }))
         local code = type(code_tabs) == "table" and code_tabs[1]
           and type(code_tabs[1].code) == "string"
@@ -1494,6 +1554,14 @@ local function build_windows(s)
     .. " colorcolumn< linebreak< breakindent< showbreak< conceallevel< concealcursor< fillchars<")
   vim.bo[s.code_buf].filetype = lang_info.filetype(s.lang)
   track_pane_cursor(s, s.code_buf)
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+    group = watch_group(),
+    buffer = s.code_buf,
+    callback = function()
+      s.user_edited = true
+      autosave(s)
+    end,
+  })
 
   vim.cmd("belowright split")
   s.res_win = vim.api.nvim_get_current_win()
@@ -1526,48 +1594,80 @@ function M.open(problem, opts)
   local function wanted()
     return not opts.guard or opts.guard()
   end
+  local lang = opts.lang or config.options.lang
   local key = session_key(problem)
   if not key then return util.err("problem has no provider identifier") end
   local existing = sessions[key]
   if session_alive(existing) then
     if not wanted() then return end
-    if opts.will_show then opts.will_show() end
-    focus_session(existing)
-    return
+    if existing.lang == lang then
+      pending_open = nil
+      if opts.will_show then opts.will_show() end
+      focus_session(existing)
+      return
+    end
+    save(existing)
+    M.close(existing)
   end
-  if opening[key] then return end
+  local requested_lang = lang
+  open_generation[key] = (open_generation[key] or 0) + 1
+  local generation = open_generation[key]
+  opening[key] = generation
+  local origin_guard = opts.origin_guard
+  if origin_guard == nil then origin_guard = opts.guard end
+  local request = {
+    problem = problem, lang = lang, path = opts.path or solution_path(problem, lang),
+    origin_guard = origin_guard, will_show = opts.will_show,
+  }
+  pending_open = request
+  local function done_open()
+    if opening[key] == generation then opening[key] = nil end
+    if pending_open == request then pending_open = nil end
+  end
+  local function is_current()
+    return pending_open == request and opening[key] == generation
+      and open_generation[key] == generation and wanted()
+      and requested_lang == config.options.lang
+  end
 
   local forced = opts.provider
   local candidates = initial_candidates(problem, forced)
-  if #candidates == 0 then return util.err("problem has no supported provider") end
+  if #candidates == 0 then
+    done_open()
+    return util.err("problem has no supported provider")
+  end
 
-  local lang = opts.lang or config.options.lang
   local candidate_index, provider = 0, nil
-  opening[key] = true
   -- One spinner for the whole attempt (every candidate provider it tries),
   -- so retries read as one task updating rather than a stack of toasts.
   local handle = util.progress("Opening " .. problem.name .. "…")
   local function status(message)
-    vim.schedule(function() handle:report(message) end)
+    vim.schedule(function()
+      if is_current() then handle:report(message) end
+    end)
   end
 
   local function start_next(last_error)
+    if not is_current() then done_open(); handle:cancel(); return end
     candidate_index = candidate_index + 1
     provider = candidates[candidate_index]
     if not provider then
-      opening[key] = nil
+      done_open()
       return vim.schedule(function()
         handle:cancel()
+        if open_generation[key] ~= generation then return end
         util.err("could not load problem: " .. tostring(last_error or "no provider succeeded"))
       end)
     end
     status("Opening " .. problem.name .. " from " .. providers.get(provider).label .. "…")
     fetch_meta(problem, provider, lang, function(err, meta)
+      if not is_current() then done_open(); handle:cancel(); return end
       if err then
         if forced then
-          opening[key] = nil
+          done_open()
           return vim.schedule(function()
             handle:cancel()
+            if open_generation[key] ~= generation then return end
             util.err("could not load problem: " .. err)
           end)
         end
@@ -1576,9 +1676,10 @@ function M.open(problem, opts)
       if meta.paid_only and not providers.paid_unlocked(provider) then
         local label = providers.get(provider).label
         if forced then
-          opening[key] = nil
+          done_open()
           return vim.schedule(function()
             handle:cancel()
+            if open_generation[key] ~= generation then return end
             util.err(problem.name .. " is paid-only on " .. label)
           end)
         end
@@ -1586,8 +1687,8 @@ function M.open(problem, opts)
       end
 
       vim.schedule(function()
+        if not is_current() then done_open(); handle:cancel(); return end
         if session_alive(sessions[key]) then
-          opening[key] = nil
           handle:cancel()
           if wanted() then
             if opts.will_show then opts.will_show() end
@@ -1596,25 +1697,14 @@ function M.open(problem, opts)
           return
         end
         local available = meta.availableLanguages or {}
-        if #available == 0 then
-          -- A successful, non-paid-only fetch always reports the languages
-          -- it actually supports (see api/init.lua's paid_only note); zero
-          -- here means this candidate provably cannot serve `lang` at all,
-          -- not "unknown" -- silently keeping `lang` would write a starter
-          -- file the judge can't build. Try the next candidate instead.
-          opening[key] = nil
-          handle:cancel()
-          local label = providers.get(provider).label
-          if forced then
-            return util.err(problem.name .. " has no available languages on " .. label)
-          end
-          opening[key] = true
-          return start_next("no available languages on " .. label)
-        end
         if not vim.tbl_contains(available, lang) then
-          util.notify(string.format("%s is unavailable; falling back to %s",
-            lang_info.name(lang), lang_info.name(available[1])))
-          lang = available[1]
+          local message = lang_info.name(lang) .. " is unavailable on " .. providers.get(provider).label
+          if forced then
+            done_open()
+            handle:cancel()
+            return util.err(message)
+          end
+          return start_next(message)
         end
 
         local selected = vim.deepcopy(problem)
@@ -1626,15 +1716,16 @@ function M.open(problem, opts)
           meta = meta,
           sections = description.sections(meta, provider),
           lang = lang,
-          path = solution_path(selected, lang),
+          path = request.path,
           busy = false,
           drawn = {},
         }
         util.mkdirp(vim.fs.dirname(s.path))
         status("Preparing the local solution and language-server support…")
         seed_file(s, s.path, function()
+          if not is_current() then done_open(); handle:cancel(); return end
           if session_alive(sessions[key]) then
-            opening[key] = nil
+            done_open()
             handle:cancel()
             if wanted() then
               if opts.will_show then opts.will_show() end
@@ -1643,14 +1734,14 @@ function M.open(problem, opts)
             return
           end
           if not wanted() then
-            opening[key] = nil
+            done_open()
             handle:cancel()
             return
           end
           if opts.will_show then opts.will_show() end
           build_windows(s)
           close_other_sessions(key)
-          opening[key] = nil
+          done_open()
           render_description(s)
           keymaps(s)
           discover_checker(s)

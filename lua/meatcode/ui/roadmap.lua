@@ -206,6 +206,7 @@ local function cycle_list(delta)
   end
   idx = ((idx - 1 + delta) % #catalog.LISTS) + 1
   config.options.list = catalog.LISTS[idx]
+  vim.api.nvim_exec_autocmds("User", { pattern = "MeatCodeStateChanged" })
   render()
 end
 
