@@ -84,6 +84,10 @@ local function run()
   vim.api.nvim_exec_autocmds('TextChangedI',{buffer=py})
   assert(util.read_file(py_path):match('return n %* 3'),'insert-mode autosave did not write code')
   assert(not vim.bo[py].modified,'autosave left solution dirty')
+  vim.o.autoread = true
+  local tick = vim.api.nvim_buf_get_changedtick(py)
+  vim.cmd('checktime '..py)
+  assert(vim.api.nvim_buf_get_changedtick(py) == tick,'autosave looked external, so checktime reloaded the solution')
   if saved then saved(nil,{lang='python',tabs={{code='class Solution:\n    def double(self,n): return 999'}}})end
   vim.wait(50,function()return false end,10)
   assert(text(py):match('return n %* 3'),'late cloud saved code overwrote autosaved edit')

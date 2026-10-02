@@ -457,14 +457,24 @@ local function save(s)
   end
 end
 
+--- Persist the open solution without `BufWrite` — that would format on every
+--- keystroke — and without leaving Neovim's recorded file time behind the
+--- bytes on disk. A raw write does the latter: the next `CursorHold`
+--- `checktime` (with 'autoread') silently reloads the buffer, which re-parses
+--- syntax and republishes diagnostics.
 local function autosave(s)
-  if not (s.code_buf and vim.api.nvim_buf_is_valid(s.code_buf)) then return end
-  local lines = vim.api.nvim_buf_get_lines(s.code_buf, 0, -1, false)
-  local ok, err = util.write_file(s.path, table.concat(lines, "\n"))
-  if ok then
-    vim.bo[s.code_buf].modified = false
-  else
-    util.err("could not autosave solution: " .. tostring(err))
+  local buf = s.code_buf
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
+  local fixeol = vim.bo[buf].fixeol
+  if not vim.bo[buf].eol then
+    vim.bo[buf].fixeol = false
+  end
+  local ok, err = pcall(vim.api.nvim_buf_call, buf, function()
+    vim.cmd("silent noautocmd lockmarks write!")
+  end)
+  vim.bo[buf].fixeol = fixeol
+  if not ok then
+    util.err("could not autosave solution: " .. tostring(err):gsub("\n.*", ""))
   end
 end
 
