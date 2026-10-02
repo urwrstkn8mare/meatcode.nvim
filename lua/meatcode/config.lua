@@ -59,6 +59,15 @@ local defaults = {
 			-- Nothing is added to your file and nothing extra is submitted.
 			clangd = true,
 		},
+		swift = {
+			-- {source} and {out} are substituted at build time.
+			cmd = { "swiftc", "-O", "-o", "{out}", "{source}" },
+		},
+		rust = {
+			-- {source} and {out} are substituted at build time. The generated
+			-- harness uses only Rust's standard library (no Cargo or downloads).
+			cmd = { "rustc", "--edition=2021", "-O", "-o", "{out}", "{source}" },
+		},
 		-- Per-test-case wall clock limit, in seconds.
 		time_limit = 10,
 	},

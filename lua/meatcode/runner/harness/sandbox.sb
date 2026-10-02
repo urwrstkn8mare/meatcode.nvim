@@ -22,6 +22,9 @@
 (allow file-read-metadata
   (literal "/") (literal "/Library") (literal "/private") (literal "/private/var")
   (literal "/private/var/db"))
+; LLVM verifies its working directory by statting each scratch-path ancestor.
+; Only those exact directory names are exposed, not their contents.
+(allow file-read-metadata (regex (param "WORK_ANCESTORS")))
 ; The shims' tool-lookup cache: without it every call costs a second. Reading
 ; it is harmless; writing stays denied, since unsandboxed tools trust it.
 (allow file-read* (regex #"^/private/var/folders/[^/]+/[^/]+/T/xcrun_db$"))

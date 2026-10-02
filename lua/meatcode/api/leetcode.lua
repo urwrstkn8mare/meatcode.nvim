@@ -239,11 +239,13 @@ function M.community_solutions(slug, lang, cb)
         tags[(tag.name or ""):lower()] = true
       end
       local title = type(solution.title) == "string" and solution.title:lower() or ""
-      local labelled = lang == "python"
-        and (tags.python == true or tags.python3 == true or title:find("python", 1, true))
-        or lang == "cpp"
-        and (tags["c++"] == true or tags.cpp == true
-          or title:find("c++", 1, true) or title:find("cpp", 1, true))
+      local labelled = tags[lang] == true or title:find(lang, 1, true) ~= nil
+      if lang == "cpp" then
+        labelled = labelled or tags["c++"] == true or title:find("c++", 1, true) ~= nil
+          or title:find("cpp", 1, true) ~= nil
+      elseif lang == "python" then
+        labelled = labelled or tags.python3 == true or title:find("python3", 1, true) ~= nil
+      end
       for _, code in ipairs(examples.code_blocks(
         type(post) == "table" and post.content or "", lang, labelled and true or false)) do
         table.insert(out, {

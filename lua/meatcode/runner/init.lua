@@ -24,7 +24,7 @@ local util = require("meatcode.util")
 --- unsandboxed; provider code and checkers only ever run sandboxed.
 local M = {}
 
-M.SUPPORTED = { python = true, cpp = true }
+M.SUPPORTED = { python = true, cpp = true, swift = true, rust = true }
 
 local EXECUTABLE_STAGES = { "reference", "editorial", "community" }
 
@@ -67,6 +67,7 @@ function M.set_cloud_mode(mode)
   if vim.tbl_contains(M.CLOUD_MODES, mode) then
     cloud_mode_choice = mode
     util.write_json(cloud_mode_path(), { force = mode })
+    vim.api.nvim_exec_autocmds("User", { pattern = "MeatCodeStateChanged" })
   end
   return M.cloud_mode()
 end
@@ -199,6 +200,35 @@ end
 
 -- ------------------------------------------------------------ execution
 
+--- Foreground runs own their processes and scratch directories. A cancelled
+--- process may exit asynchronously, so a replacement never reuses its files.
+local run_serial = 0
+
+local function cleanup_run(run)
+  if not run or not run.finished or next(run.processes) or run.keep_files then return end
+  for _, dir in ipairs(run.dirs) do vim.fn.delete(dir, "rf") end
+  run.dirs = {}
+end
+
+local function schedule(run, callback)
+  vim.schedule(function()
+    if not run or not run.finished then callback() end
+  end)
+end
+
+local function system(run, cmd, opts, callback)
+  local process
+  process = vim.system(cmd, opts, function(result)
+    vim.schedule(function()
+      if run then run.processes[process] = nil end
+      if not run or not run.finished then callback(result) end
+      cleanup_run(run)
+    end)
+  end)
+  if run then run.processes[process] = true end
+  return process
+end
+
 local function harness_dir()
   local this = debug.getinfo(1, "S").source:sub(2)
   return vim.fs.dirname(vim.fn.fnamemodify(this, ":p")) .. "/harness"
@@ -207,10 +237,14 @@ end
 --- Scratch directory for one run. `scope` separates background oracle work
 --- ("oracle"), foreground oracle outputs ("probe") and your own runs (nil),
 --- which may execute concurrently.
-local function workdir(problem_id, lang, scope)
+local function workdir(problem_id, lang, scope, run)
+  if run then scope = (scope or "local") .. "-" .. run.id end
   local dir = string.format("%s/run/%s-%s%s", config.options.cache_dir, problem_id, lang,
     scope and ("-" .. scope) or "")
   util.mkdirp(dir)
+  -- Swift/Clang module caches and Seatbelt must agree on one path identity.
+  dir = vim.uv.fs_realpath(dir) or dir
+  if run then table.insert(run.dirs, dir) end
   return dir
 end
 
@@ -341,7 +375,7 @@ end
 ---@param dir string
 ---@param timeout_ms integer
 ---@param cb fun(backtrace: string|nil)
-local function debugger_backtrace(cmd, dir, timeout_ms, cb)
+local function debugger_backtrace(cmd, dir, timeout_ms, cb, run)
   if vim.fn.executable("lldb") ~= 1 then
     return cb(nil)
   end
@@ -356,8 +390,8 @@ local function debugger_backtrace(cmd, dir, timeout_ms, cb)
     table.insert(debugger, arg)
   end
 
-  vim.system(debugger, { text = true, cwd = dir, timeout = timeout_ms }, function(res)
-    vim.schedule(function()
+  system(run, debugger, { text = true, cwd = dir, timeout = timeout_ms }, function(res)
+    schedule(run, function()
       local output = vim.trim((res.stdout or "") .. "\n" .. (res.stderr or ""))
       local marker = output:find("(lldb) thread backtrace", 1, true)
       if marker then
@@ -390,7 +424,7 @@ end
 ---@param debug_crash boolean|nil
 ---@param cases string[]
 ---@param cb fun(result: meatcode.RunResult)
-local function finish_failure(res, cmd, dir, timeout_ms, debug_crash, cases, cb)
+local function finish_failure(res, cmd, dir, timeout_ms, debug_crash, cases, cb, run)
   local last = crashed_case(res.stderr)
 
   local report = crash.parse(without_shim_noise(res.stderr or ""))
@@ -422,7 +456,7 @@ local function finish_failure(res, cmd, dir, timeout_ms, debug_crash, cases, cb)
       if result.crash then result.crash.backtrace = backtrace end
     end
     cb(summarize(result))
-  end)
+  end, run)
 end
 
 --- Linux: bubblewrap runs each candidate in fresh user, PID, network, IPC and
@@ -473,11 +507,18 @@ local function macos_sandbox_command(cmd, dir)
     return nil, "`sandbox-exec` is required to run provider-supplied code safely on macOS"
   end
   local tmp = util.mkdirp(dir .. "/tmp")
+  local real_dir = vim.uv.fs_realpath(dir) or dir
+  local ancestors, parent = {}, vim.fs.dirname(real_dir)
+  while parent and parent ~= "/" do
+    table.insert(ancestors, (parent:gsub("([^%w/_%-])", "\\%1")))
+    parent = vim.fs.dirname(parent)
+  end
   local wrapped = {
     "sandbox-exec",
     -- Seatbelt matches resolved paths, so a scratch directory reached through a
     -- symlink (/tmp is /private/tmp) must be named by its real path.
-    "-D", "WORK_DIR=" .. (vim.uv.fs_realpath(dir) or dir),
+    "-D", "WORK_DIR=" .. real_dir,
+    "-D", "WORK_ANCESTORS=^(" .. table.concat(ancestors, "|") .. ")$",
     "-f", harness_dir() .. "/sandbox.sb", "--",
     "/usr/bin/env", "-i",
     "PATH=/usr/bin:/bin",
@@ -496,6 +537,11 @@ end
 --- The user may opt out explicitly; otherwise a missing sandbox fails closed.
 local function sandbox_command(cmd, dir, required)
   if not required or config.options.runner.sandbox == false then return cmd, false end
+  local executable = vim.fn.exepath(cmd[1])
+  if executable == "" then return nil, "runner executable is unavailable: " .. tostring(cmd[1]) end
+  -- Resolve against the user's PATH before the sandbox clears its environment.
+  cmd = vim.deepcopy(cmd)
+  cmd[1] = vim.uv.fs_realpath(executable) or executable
   if vim.fn.has("mac") == 1 then
     return macos_sandbox_command(cmd, dir)
   end
@@ -515,7 +561,7 @@ function M.parallelism(case_count)
 end
 
 --- Run independent case shards concurrently, then restore stable case order.
-local function execute(cmd, dir, cases, cb, debug_crash, untrusted)
+local function execute(cmd, dir, cases, cb, debug_crash, untrusted, run)
   local timeout_ms = (config.options.runner.time_limit or 10) * 1000
   local shards = parallelism(#cases)
   local commands = {}
@@ -532,8 +578,8 @@ local function execute(cmd, dir, cases, cb, debug_crash, untrusted)
 
   local pending, reports, failure = #commands, {}, nil
   for _, command in ipairs(commands) do
-    vim.system(command.cmd, { text = true, cwd = dir, timeout = timeout_ms * 6 }, function(res)
-      vim.schedule(function()
+    system(run, command.cmd, { text = true, cwd = dir, timeout = timeout_ms * 6 }, function(res)
+      schedule(run, function()
         local report = decode_report(res.stdout or "")
         if report then
           table.insert(reports, report)
@@ -545,7 +591,7 @@ local function execute(cmd, dir, cases, cb, debug_crash, untrusted)
         if pending > 0 then return end
         if failure then
           return finish_failure(failure.res, failure.cmd, dir, timeout_ms,
-            debug_crash and shards == 1 and not failure.sandboxed, cases, cb)
+            debug_crash and shards == 1 and not failure.sandboxed, cases, cb, run)
         end
 
         local merged = { ok = true, cases = {}, parallelism = shards }
@@ -599,7 +645,7 @@ local function expected_json(cases, answer_lists)
 end
 
 local function run_python(problem_id, code, meta, cases, cb, oracle, answer_lists)
-  local dir = workdir(problem_id, "python", meta._scope)
+  local dir = workdir(problem_id, "python", meta._scope, meta._run)
   local ref = signature_source(meta, "python", oracle)
   if not ref or ref == "" then
     return fail(cb, "no Python starter code to derive the signature from", true)
@@ -619,13 +665,13 @@ local function run_python(problem_id, code, meta, cases, cb, oracle, answer_list
   table.insert(py, dir)
   table.insert(py, "function")
   table.insert(py, oracle)
-  execute(py, dir, cases, cb, false, meta._untrusted_user or oracle == "reference")
+  execute(py, dir, cases, cb, false, meta._untrusted_user or oracle == "reference", meta._run)
 end
 
 --- Design problems: normalise the call sequence, then replay it in the harness.
 --- `mode` is "class" for an operation sequence, "roundtrip" for encode/decode.
 local function run_python_class(problem_id, code, meta, cases, cb, mode, oracle, answer_lists)
-  local dir = workdir(problem_id, "python", meta._scope)
+  local dir = workdir(problem_id, "python", meta._scope, meta._run)
   local ref = signature_source(meta, "python", oracle)
   if not ref or ref == "" then
     return fail(cb, "no Python starter code to derive the signature from", true)
@@ -658,11 +704,11 @@ local function run_python_class(problem_id, code, meta, cases, cb, mode, oracle,
   table.insert(py, dir)
   table.insert(py, mode)
   table.insert(py, oracle)
-  execute(py, dir, cases, cb, false, meta._untrusted_user or oracle == "reference")
+  execute(py, dir, cases, cb, false, meta._untrusted_user or oracle == "reference", meta._run)
 end
 
 local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle, answer_lists)
-  local dir = workdir(problem_id, "cpp", meta._scope)
+  local dir = workdir(problem_id, "cpp", meta._scope, meta._run)
   local starter = meta.starterCode and meta.starterCode.cpp
   if not starter or starter == "" then
     return fail(cb, "no C++ starter code to derive the signature from", true)
@@ -714,8 +760,8 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle, answer_l
   local untrusted = meta._untrusted_user or oracle == "reference"
   local compile_cmd, sandbox_err = sandbox_command(compile, dir, untrusted)
   if not compile_cmd then return fail(cb, sandbox_err, true) end
-  vim.system(compile_cmd, { text = true, cwd = dir, timeout = 120000 }, function(res)
-    vim.schedule(function()
+  system(meta._run, compile_cmd, { text = true, cwd = dir, timeout = 120000 }, function(res)
+    schedule(meta._run, function()
       if res.code ~= 0 then
         local msg = vim.trim(without_shim_noise(res.stderr or ""))
         -- Compiler noise from our generated driver is not useful to the user;
@@ -733,7 +779,70 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle, answer_l
         end
         return fail(cb, msg)
       end
-      execute({ bin, dir }, dir, cases, cb, true, untrusted)
+      execute({ bin, dir }, dir, cases, cb, true, untrusted, meta._run)
+    end)
+  end)
+end
+
+local function run_native(problem_id, code, lang, meta, cases, cb, mode, oracle, answer_lists)
+  local generator = require("meatcode.runner." .. lang)
+  local starter = meta.starterCode and meta.starterCode[lang]
+  if not starter or starter == "" then
+    return fail(cb, "no " .. lang .. " starter code to derive the signature from", true)
+  end
+  local dir = workdir(problem_id, lang, meta._scope, meta._run)
+  local ref = oracle == "reference"
+    and (meta._oracle_code or (meta.solutions and meta.solutions[lang])) or nil
+  local source, err
+  if mode == "class" then
+    local cls, parse_err = generator.parse_class(starter)
+    if not cls then return fail(cb, parse_err, true) end
+    local encoded, encode_err = ops.encode_cases(cases, generator.class_spec(cls))
+    if not encoded then return fail(cb, encode_err, true) end
+    util.write_file(dir .. "/ops.json", encoded)
+    source, err = generator.generate_class(starter, oracle, code, ref)
+  elseif mode == "roundtrip" then
+    source, err = generator.generate_roundtrip(starter, oracle, code, ref)
+  else
+    source, err = generator.generate(starter, oracle, code, ref)
+  end
+  if not source then return fail(cb, err, true) end
+  local path = dir .. "/main." .. (lang == "rust" and "rs" or "swift")
+  util.write_file(path, source)
+  util.write_file(dir .. "/cases.json", ops.encode(cases))
+  if mode ~= "class" then
+    local formats, arguments = require("meatcode.runner.formats"), {}
+    for i, case in ipairs(cases) do arguments[i] = formats.values(case) end
+    util.write_file(dir .. "/arguments.json", ops.encode(arguments))
+  end
+  util.write_file(dir .. "/expected.json", expected_json(cases, answer_lists))
+  local bin, compile = dir .. "/run", {}
+  for _, arg in ipairs(config.options.runner[lang].cmd) do
+    table.insert(compile, (arg:gsub("{out}", function() return bin end)
+      :gsub("{source}", function() return path end)))
+  end
+  local untrusted = meta._untrusted_user or oracle == "reference"
+  if lang == "swift" and untrusted then
+    vim.list_extend(compile, { "-module-cache-path", dir .. "/modules" })
+  end
+  local cmd, sandbox_err = sandbox_command(compile, dir, untrusted)
+  if not cmd then return fail(cb, sandbox_err, true) end
+  system(meta._run, cmd, { text = true, cwd = dir, timeout = 120000 }, function(res)
+    schedule(meta._run, function()
+      if res.code ~= 0 then
+        return fail(cb, "compile error\n" .. vim.trim(without_shim_noise(res.stderr or "")))
+      end
+      execute({ bin, dir }, dir, cases, function(report)
+        for _, case in ipairs(report.cases or {}) do
+          if case.status ~= "error" and case.status ~= "oracle_error"
+            and type(case.actual) == "string" then
+            local expected = oracle == "reference" and { case.expected }
+              or (answer_lists and answer_lists[(case.index or 0) + 1]) or {}
+            case.status, case.expected = answers.grade(case.actual, expected)
+          end
+        end
+        cb(tally(report))
+      end, false, untrusted, meta._run)
     end)
   end)
 end
@@ -773,14 +882,17 @@ local function run_selected(problem_id, code, lang, meta, cases, cb, oracle, ans
     end
     return run_python(problem_id, code, meta, cases, cb, oracle, answer_lists)
   end
+  if lang == "swift" or lang == "rust" then
+    return run_native(problem_id, code, lang, meta, cases, cb, kind, oracle, answer_lists)
+  end
   return run_cpp(problem_id, code, meta, cases, cb, kind, oracle, answer_lists)
 end
 
 --- Grade `outputs` (JSON text per case; nil where the solution produced none)
 --- with an openleetcode checker. The checker is remote code, so it always runs
 --- sandboxed, in Python whatever the solution's language.
-local function run_checker(problem_id, checker, cases, outputs, cb, scope)
-  local dir = workdir(problem_id, "checker", scope)
+local function run_checker(problem_id, checker, cases, outputs, cb, scope, run)
+  local dir = workdir(problem_id, "checker", scope, run)
   local harness = read_harness(cb, "python.py")
   if not harness then return end
   local script = read_harness(cb, "checker.py")
@@ -802,7 +914,7 @@ local function run_checker(problem_id, checker, cases, outputs, cb, scope)
   local py = vim.deepcopy(config.options.runner.python.cmd)
   table.insert(py, dir .. "/checker.py")
   table.insert(py, dir)
-  execute(py, dir, cases, cb, false, true)
+  execute(py, dir, cases, cb, false, true, run)
 end
 
 -- ------------------------------------------------------------ oracle selection
@@ -1191,7 +1303,7 @@ end
 
 --- Start the cloud test run. `wait` hands its outcome over once (right away if
 --- it already finished); `cancel` ends it early and drops the outcome.
-local function start_cloud(cloud, code, cases)
+local function start_cloud(cloud, code, cases, run)
   local job = { finished = false, cancelled = false, waiters = {} }
   job.stop = cloud.test(code, cases, function(err, results)
     vim.schedule(function()
@@ -1210,6 +1322,7 @@ local function start_cloud(cloud, code, cases)
     job.cancelled = true
     if job.stop then job.stop() end
   end
+  if run then table.insert(run.stops, job.cancel) end
   return job
 end
 
@@ -1293,8 +1406,8 @@ local function local_reason(report)
 end
 
 --- Run everything on the judge: the problem cannot run locally.
-local function cloud_only(problem_id, code, cases, cloud, finish, status, reason, job)
-  job = job or start_cloud(cloud, code, cases)
+local function cloud_only(problem_id, code, cases, cloud, finish, status, reason, job, run)
+  job = job or start_cloud(cloud, code, cases, run)
   if status then
     status(string.format("Running %d case%s on %s's judge (%s)", #cases, #cases == 1 and "" or "s",
       providers.get(cloud.provider).label, reason))
@@ -1378,7 +1491,7 @@ end
 --- run and is cancelled when every output matches a cached answer; otherwise
 --- the judge settles every case that did not match.
 local function cloud_run(problem_id, code, lang, meta, cases, cloud, selected, finish, status)
-  local job = start_cloud(cloud, code, cases)
+  local job = start_cloud(cloud, code, cases, meta._run)
   local label = providers.get(cloud.provider).label
   if status then
     status(string.format("Running %d case%s locally · %s test run started alongside",
@@ -1421,7 +1534,7 @@ local function checker_run(problem_id, code, lang, meta, cases, selected, cloud,
   local lists = answers.lookup(problem_id, meta, cases, trusted(selected))
   run_selected(problem_id, code, lang, meta, cases, function(report)
     if report.unsupported and cloud then
-      return cloud_only(problem_id, code, cases, cloud, finish, status, local_reason(report))
+      return cloud_only(problem_id, code, cases, cloud, finish, status, local_reason(report), nil, meta._run)
     end
     if not report.ok then return finish(report, "checker", "openleetcode") end
     local outputs, by_index = {}, {}
@@ -1451,7 +1564,7 @@ local function checker_run(problem_id, code, lang, meta, cases, selected, cloud,
       end
       answers.add(problem_id, accepted)
       finish(tally(report), "checker", "openleetcode")
-    end, "probe")
+    end, "probe", meta._run)
   end, "expected", lists)
 end
 
@@ -1463,7 +1576,7 @@ end
 --- forces it, and for problems that cannot run locally at all. Your solution
 --- always runs alone, unsandboxed.
 ---@param cloud meatcode.CloudOracle|nil
-function M.run(problem_id, code, lang, meta, cases, cb, status, cloud)
+local function start_run(problem_id, code, lang, meta, cases, cb, status, cloud)
   if #cases == 0 then
     return fail(cb, "no test cases to run", true)
   end
@@ -1484,7 +1597,7 @@ function M.run(problem_id, code, lang, meta, cases, cb, status, cloud)
 
   if not runs_locally(meta, lang) then
     if cloud then
-      return cloud_only(problem_id, code, cases, cloud, finish, status, local_limit(meta, lang))
+      return cloud_only(problem_id, code, cases, cloud, finish, status, local_limit(meta, lang), nil, meta._run)
     end
     return fail(cb, local_limit(meta, lang), true)
   end
@@ -1518,11 +1631,37 @@ function M.run(problem_id, code, lang, meta, cases, cb, status, cloud)
     local lists = answers.lookup(problem_id, meta, cases, trusted(selected))
     run_selected(problem_id, code, lang, meta, cases, function(report)
       if report.unsupported and cloud then
-        return cloud_only(problem_id, code, cases, cloud, finish, status, local_reason(report))
+        return cloud_only(problem_id, code, cases, cloud, finish, status, local_reason(report), nil, meta._run)
       end
       finish(report, selected.stage, selected.provider)
     end, "expected", lists)
   end, status, "probe")
+end
+
+--- Return an idempotent cancellation handle, including for cloud-only runs.
+function M.run(problem_id, code, lang, meta, cases, cb, status, cloud)
+  run_serial = run_serial + 1
+  local run = { id = tostring(run_serial), processes = {}, stops = {}, dirs = {} }
+  local function cancel()
+    if run.finished then return end
+    run.finished = true
+    for _, stop in ipairs(run.stops) do stop() end
+    for process in pairs(run.processes) do process:kill(9) end
+    cleanup_run(run)
+  end
+  local function finish(report)
+    if run.finished then return end
+    run.finished = true
+    run.keep_files = report.crash ~= nil
+    cleanup_run(run)
+    cb(report)
+  end
+  local function update(message)
+    if not run.finished and status then status(message) end
+  end
+  start_run(problem_id, code, lang, vim.tbl_extend("force", {}, meta, { _run = run }),
+    cases, finish, status and update or nil, cloud)
+  return cancel
 end
 
 return M

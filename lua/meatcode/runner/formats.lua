@@ -28,14 +28,56 @@ local function lines_of(block)
   return out
 end
 
+--- Split one argument line on commas that sit outside brackets and quotes.
+--- `root=[5,3,8], p=3` is three arguments; `nums=[1,2]` stays one value.
+local function split_values(line)
+  local _, value = split_label(line)
+  local parts, buf, depth, quote = {}, {}, 0, nil
+  local i = 1
+  while i <= #value do
+    local c = value:sub(i, i)
+    if quote then
+      buf[#buf + 1] = c
+      if c == "\\" then
+        local nxt = value:sub(i + 1, i + 1)
+        if nxt ~= "" then buf[#buf + 1] = nxt; i = i + 1 end
+      elseif c == quote then
+        quote = nil
+      end
+    elseif c == '"' or c == "'" then
+      quote = c
+      buf[#buf + 1] = c
+    elseif c == "[" or c == "{" or c == "(" then
+      depth = depth + 1
+      buf[#buf + 1] = c
+    elseif c == "]" or c == "}" or c == ")" then
+      depth = math.max(0, depth - 1)
+      buf[#buf + 1] = c
+    elseif c == "," and depth == 0 then
+      local piece = vim.trim(table.concat(buf))
+      local _, inner = split_label(piece)
+      parts[#parts + 1] = inner
+      buf = {}
+    else
+      buf[#buf + 1] = c
+    end
+    i = i + 1
+  end
+  local piece = vim.trim(table.concat(buf))
+  if piece ~= "" or #parts > 0 then
+    local _, inner = split_label(piece)
+    parts[#parts + 1] = inner
+  end
+  return parts
+end
+
 --- The case's argument values in signature order, labels dropped.
 ---@param block string
 ---@return string[]
 function M.values(block)
   local out = {}
   for _, line in ipairs(lines_of(block)) do
-    local _, value = split_label(line)
-    table.insert(out, value)
+    vim.list_extend(out, split_values(line))
   end
   return out
 end
@@ -150,6 +192,13 @@ function M.class_spec(meta)
   if type(starters.cpp) == "string" and starters.cpp ~= "" then
     local cls = cpp.parse_class(starters.cpp)
     if cls then return cpp.class_spec(cls) end
+  end
+  for _, lang in ipairs({ "swift", "rust" }) do
+    if type(starters[lang]) == "string" and starters[lang] ~= "" then
+      local generator = require("meatcode.runner." .. lang)
+      local cls = generator.parse_class(starters[lang])
+      if cls then return generator.class_spec(cls) end
+    end
   end
   return nil
 end

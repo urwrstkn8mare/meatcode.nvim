@@ -138,12 +138,14 @@ end
 local CODE_TAGS = {
   python = { python = true, python3 = true, py = true },
   cpp = { cpp = true, ["c++"] = true },
+  swift = { swift = true },
+  rust = { rust = true, rs = true },
 }
 
 --- Language-labelled fenced code blocks from ordinary Markdown (LeetCode) and
 --- LintCode's single-fence `[[python]] ... [[cpp]] ...` convention.
 ---@param content string
----@param lang "python"|"cpp"
+---@param lang "python"|"cpp"|"swift"|"rust"
 ---@param allow_unlabelled boolean|nil trusted external language tag/title
 ---@return string[]
 function M.code_blocks(content, lang, allow_unlabelled)
