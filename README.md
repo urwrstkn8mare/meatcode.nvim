@@ -34,9 +34,12 @@ a merged catalog, solve/test locally, submit to any of the three.
   configure on meatcode's side. Without it (or with any other notifier),
   everything still works through plain `vim.notify`.
 
-Python, C++, Swift and Rust run locally. Other languages and unsupported
-problem signatures use the submit judge's test run. Rust needs no Cargo
-project or downloaded crates; see [local coverage](doc/local-runs.md#what-runs-locally).
+Python, C++, Swift and Rust are the supported solution languages. Unsupported
+problem signatures use the submit judge's test run. Rust needs no Cargo project
+or downloaded crates; see [local coverage](doc/local-runs.md#what-runs-locally).
+For Rust IntelliSense, configure rust-analyzer and install the standard-library
+sources (`rust-src`); MeatCode generates its non-Cargo project and judge context
+automatically. See [Rust editor support](doc/configuration.md#rust-editor-support).
 
 ## Install
 
@@ -92,7 +95,7 @@ wants](doc/authentication.md).
 | `:MeatCode list [query]` | Fuzzy-search the merged catalog |
 | `:MeatCode random` | A random unsolved problem you can open |
 | `:MeatCode daily` | LeetCode's problem of the day |
-| `:MeatCode lang [name]` | Show or change the solution language |
+| `:MeatCode lang [name]` | Show or change language: `python`, `cpp`, `swift`, `rust` |
 | `:MeatCode login`/`logout [provider]` | See above |
 
 The homepage, roadmap and finder share one tab: opening any of them jumps
@@ -148,6 +151,7 @@ the actual Neovim UI buffers and commands:
 nvim --headless -u NONE -l tests/local_runs.lua
 nvim --headless -u NONE -l tests/ui_state.lua
 MEATCODE_NO_SETUP=1 nvim --headless -u NONE -l tests/ui_state.lua
+MEATCODE_RUST_ANALYZER=/path/to/rust-analyzer nvim --headless -u NONE -l tests/rust_editor.lua
 ```
 
 The runner check needs Python, Swift, Rust, and a supported sandbox. UI checks
@@ -155,6 +159,10 @@ fixture provider responses; they do not log into real accounts. To also
 exercise the Telescope catalogue, set `MEATCODE_PICKER=1`,
 `MEATCODE_TELESCOPE` to your telescope.nvim checkout, and `MEATCODE_PLENARY`
 to your plenary.nvim checkout when running `tests/ui_state.lua`.
+
+The Rust editor check additionally needs rust-analyzer and `rust-src`; it checks
+completion, compiler diagnostics, clean solution files, isolated helper types,
+and cross-provider Rust submission entry points.
 
 ## TODO
 

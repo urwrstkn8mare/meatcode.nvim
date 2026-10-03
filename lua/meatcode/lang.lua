@@ -19,6 +19,12 @@ M.info = {
   sql = { name = "PostgreSQL", ext = "sql", ft = "sql" },
 }
 
+local supported = { "cpp", "python", "rust", "swift" }
+
+function M.supported(lang)
+  return vim.tbl_contains(supported, lang)
+end
+
 function M.ext(lang)
   local info = M.info[lang]
   return info and info.ext or "txt"
@@ -35,7 +41,7 @@ function M.name(lang)
 end
 
 function M.all()
-  return vim.tbl_keys(M.info)
+  return vim.deepcopy(supported)
 end
 
 return M

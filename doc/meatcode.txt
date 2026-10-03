@@ -75,6 +75,7 @@ of the homepage to log that provider in or out.
 :MeatCode random        Open a random accessible unsolved problem.
 :MeatCode daily         Open LeetCode's problem of the day.
 :MeatCode lang [NAME]   Show or change the solution language.
+                       Supported names: python, cpp, swift, rust.
 :MeatCode login NAME    Log in to `leetcode`, `neetcode`, or `lintcode`.
 :MeatCode logout NAME   Remove credentials for one provider.
 
@@ -320,6 +321,30 @@ them implicitly. Pyright/pylsp have no force-include equivalent, so the block
 is inserted into the real file and stripped back out before every local run
 and submission — see doc/python.md. `<leader>nR` (reset)
 re-derives and re-inserts it.
+
+`runner.rust.rust_analyzer` (default true) writes rust-project.json beneath
+solutions_dir and per-solution crate wrappers beneath .meatcode/rust/. Each Rust
+solution is a separate crate; its edition and sysroot come from runner.rust.cmd.
+No Cargo project or crate downloads are needed. Configure rust-analyzer normally
+with rust-project.json as a root marker, and install rust-src for standard-library
+completion/navigation (`rustup component add rust-src` with rustup).
+
+Editor wrappers load the original solution as a module with a crate-local judge
+prelude. Separate stable-Rust wrappers supply the same context for rustc checks.
+Solution files contain only user code, with no generated imports or footer;
+completion and check-on-save diagnostics target that buffer without line offsets.
+Custom helper definitions are extracted from each starter's comments and
+isolated by solution path.
+Managed project changes reload only rust-analyzer clients rooted at solutions_dir.
+A user-owned rust-project.json is preserved; add the generated wrappers to it.
+Set runner.rust.rust_analyzer=false to disable generation.
+See doc/configuration.md for details.
+
+Function-style Rust submissions to another provider load the judge's starter and
+adapt compatible entry-point names in the submitted payload only. For example,
+LeetCode's contains_duplicate entry point can forward to your has_duplicate
+method without changing your file. Type differences are reported before submitting.
+Design-class APIs and other languages are not rewritten.
 
 Helper types are deliberately per problem rather than shared: `Node` is an
 adjacency list in Clone Graph and a random pointer in Copy List with Random

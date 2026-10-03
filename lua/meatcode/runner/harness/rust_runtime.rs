@@ -162,9 +162,6 @@ impl<T:ToJson> ToJson for Vec<T> {
 }
 fn encoded<T:ToJson>(value:&T)->String { let mut output=String::new();value.to_json(&mut output);output }
 
-#[derive(PartialEq,Eq,Clone,Debug)]
-pub struct ListNode { pub val:i32, pub next:Option<Box<ListNode>> }
-impl ListNode { pub fn new(val:i32)->Self { Self { val,next:None } } }
 impl FromJson for Option<Box<ListNode>> {
     fn from_json(value:Json)->Result<Self,String> {
         if matches!(value,Json::Null) { return Ok(None); }
@@ -178,9 +175,6 @@ impl ToJson for Option<Box<ListNode>> {
         while let Some(current)=node { if !first { output.push(','); }first=false;current.val.to_json(output);node=current.next.as_ref(); }output.push(']');
     }
 }
-#[derive(PartialEq,Eq,Debug)]
-pub struct TreeNode { pub val:i32, pub left:Option<Rc<RefCell<TreeNode>>>, pub right:Option<Rc<RefCell<TreeNode>>> }
-impl TreeNode { pub fn new(val:i32)->Self { Self { val,left:None,right:None } } }
 impl FromJson for Option<Rc<RefCell<TreeNode>>> {
     fn from_json(value:Json)->Result<Self,String> {
         if matches!(value,Json::Null) { return Ok(None); }

@@ -67,6 +67,9 @@ local defaults = {
 			-- {source} and {out} are substituted at build time. The generated
 			-- harness uses only Rust's standard library (no Cargo or downloads).
 			cmd = { "rustc", "--edition=2021", "-O", "-o", "{out}", "{source}" },
+			-- Generate rust-project.json with editor context outside solutions.
+			-- Runs and submissions get only your solution.
+			rust_analyzer = true,
 		},
 		-- Per-test-case wall clock limit, in seconds.
 		time_limit = 10,

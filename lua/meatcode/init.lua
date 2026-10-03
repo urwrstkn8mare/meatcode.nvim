@@ -202,8 +202,9 @@ function M.set_lang(name)
   if not name or name == "" then
     return util.notify("language: " .. lang_info.name(config.options.lang))
   end
-  if not lang_info.info[name] then
-    return util.err("unknown language: " .. tostring(name))
+  if not lang_info.supported(name) then
+    return util.err("unsupported language: " .. tostring(name)
+      .. " (supported: " .. table.concat(lang_info.all(), ", ") .. ")")
   end
   if config.options.lang == name then
     return util.notify("language: " .. lang_info.name(name))

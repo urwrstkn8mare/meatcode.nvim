@@ -80,6 +80,13 @@ local function run()
   ui.open(problem)
   settle(function()return ui.is_session_tab()and buffer('python')end,'problem did not open')
   local py=buffer('python'); local py_path=vim.api.nvim_buf_get_name(py)
+  assert(vim.deep_equal(vim.fn.getcompletion('MeatCode lang ', 'cmdline'), {'cpp','python','rust','swift'}),
+    'language completion offered unsupported languages')
+  for _,name in ipairs({'java','javascript','not-a-language'})do
+    pcall(vim.cmd,'MeatCode lang '..name)
+    assert(require('meatcode.config').options.lang=='python','unsupported language changed active language')
+    assert(vim.api.nvim_get_current_buf()==py and ui.is_session_tab(),'rejected language disturbed problem view')
+  end
   vim.api.nvim_buf_set_lines(py,0,-1,false,{'class Solution:','    def double(self, n):','        return n * 3'})
   vim.api.nvim_exec_autocmds('TextChangedI',{buffer=py})
   assert(util.read_file(py_path):match('return n %* 3'),'insert-mode autosave did not write code')

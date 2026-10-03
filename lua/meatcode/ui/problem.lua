@@ -8,6 +8,7 @@ local lang_info = require("meatcode.lang")
 local pages = require("meatcode.ui.pages")
 local progress = require("meatcode.progress")
 local python_prelude = require("meatcode.runner.python_prelude")
+local rust_editor = require("meatcode.runner.rust_editor")
 local results = require("meatcode.ui.results")
 local runner = require("meatcode.runner")
 local tabs = require("meatcode.ui.tab")
@@ -425,19 +426,16 @@ local function discover_checker(s)
   pending = false
 end
 
---- `code` with the Python auto-import block prepended, when the language is
---- Python and `runner.python.auto_imports` is on; unchanged otherwise.
-local function python_seed(lang, code)
-  if lang == "python" and config.options.runner.python.auto_imports then
+--- Add the language's editor-only imports; runners and judges never see them.
+local function editor_seed(s, code)
+  if s.lang == "python" and config.options.runner.python.auto_imports then
     return python_prelude.seed(code)
   end
   return code
 end
 
---- The buffer's text, exactly as a run or submission should see it. Python
---- solutions get their editor-only auto-import block (see
---- `runner.python_prelude`) stripped back out here -- the one place every
---- local run and every cloud submission both flow through.
+--- The buffer's text, exactly as a run or submission should see it. This is
+--- the shared boundary for stripping Python's editor-only imports.
 local function current_code(s)
   local lines = vim.api.nvim_buf_get_lines(s.code_buf, 0, -1, false)
   for i, line in ipairs(lines) do
@@ -776,7 +774,7 @@ function M.submit()
   s.panel = "submit"
   results.running(s.res_buf, "Submitting to " .. backend.label)
 
-  backend.submit(s.problem, s.meta, current_code(s), s.lang, function(err, data)
+  providers.submit(s.problem, s.meta, current_code(s), s.lang, s.content_provider, s.submit_provider, function(err, data)
     vim.schedule(function()
       s.busy = false
       s.busy_kind = nil
@@ -843,7 +841,7 @@ function M.reset()
   if s.busy then return util.notify("already running") end
 
   local starter = (s.meta.starterCode or {})[s.lang] or ""
-  starter = python_seed(s.lang, starter)
+  starter = editor_seed(s, starter)
   local local_err = reset_local(s, starter)
   if local_err then return util.err(local_err) end
   s.failed_input = nil
@@ -1497,9 +1495,16 @@ end
 local function seed_file(s, path, cb)
   local starter = (s.meta.starterCode or {})[s.lang] or ""
   if s.lang == "cpp" then ensure_clangd(util.slug(providers.filename(s.problem)), starter) end
-  if vim.uv.fs_stat(path) then return cb() end
+  local function prepared()
+    if s.lang == "rust" then
+      rust_editor.ensure(path, starter, cb)
+    else
+      cb()
+    end
+  end
+  if vim.uv.fs_stat(path) then return prepared() end
 
-  util.write_file(path, python_seed(s.lang, starter))
+  util.write_file(path, editor_seed(s, starter))
 
   local backend = providers.get(s.content_provider)
   if backend.saved_code then
@@ -1515,7 +1520,7 @@ local function seed_file(s, path, cb)
           and (data.lang == nil or data.lang == s.lang)
           and code_tabs[1].code or nil
         if not (code and code ~= "" and code ~= starter) then return end
-        local write_code = python_seed(s.lang, code)
+        local write_code = editor_seed(s, code)
         vim.api.nvim_buf_set_lines(s.code_buf, 0, -1, false, vim.split(write_code, "\n", { plain = true }))
         vim.bo[s.code_buf].modified = false
         util.write_file(path, write_code)
@@ -1523,7 +1528,7 @@ local function seed_file(s, path, cb)
     end)
   end
 
-  vim.schedule(cb)
+  vim.schedule(prepared)
 end
 
 local function build_windows(s)
