@@ -322,6 +322,13 @@ is inserted into the real file and stripped back out before every local run
 and submission — see doc/python.md. `<leader>nR` (reset)
 re-derives and re-inserts it.
 
+Swift LSP support comes from your editor configuration. Install sourcekit-lsp
+with the Swift toolchain (Xcode provides it on macOS), configure and enable
+sourcekit through nvim-lspconfig. Its defaults support standalone files without
+a project root. MeatCode does not configure, enable or start language servers.
+No generated Swift package is needed, and solution files are unchanged.
+See doc/configuration.md for a nvim-lspconfig example.
+
 `runner.rust.rust_analyzer` (default true) writes rust-project.json beneath
 solutions_dir and per-solution crate wrappers beneath .meatcode/rust/. Each Rust
 solution is a separate crate; its edition and sysroot come from runner.rust.cmd.
@@ -340,11 +347,14 @@ A user-owned rust-project.json is preserved; add the generated wrappers to it.
 Set runner.rust.rust_analyzer=false to disable generation.
 See doc/configuration.md for details.
 
-Function-style Rust submissions to another provider load the judge's starter and
-adapt compatible entry-point names in the submitted payload only. For example,
-LeetCode's contains_duplicate entry point can forward to your has_duplicate
-method without changing your file. Type differences are reported before submitting.
-Design-class APIs and other languages are not rewritten.
+Function-style submissions to another provider load the judge's starter for
+Python, C++, Swift and Rust. Compatible entry-point names are bridged only in
+the submission payload; Swift argument labels are adapted too. For example,
+containsDuplicate can forward to hasDuplicate without changing your Swift file.
+Your local-run entry point is unchanged. Incompatible or unparseable signatures
+are rejected before upload. Same-provider submissions and design-class APIs
+are not rewritten. Future languages must register a submission adapter;
+missing adapters fail before upload instead of silently submitting unchecked code.
 
 Helper types are deliberately per problem rather than shared: `Node` is an
 adjacency list in Clone Graph and a random pointer in Copy List with Random

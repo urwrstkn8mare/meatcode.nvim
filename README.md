@@ -40,6 +40,9 @@ or downloaded crates; see [local coverage](doc/local-runs.md#what-runs-locally).
 For Rust IntelliSense, configure rust-analyzer and install the standard-library
 sources (`rust-src`); MeatCode generates its non-Cargo project and judge context
 automatically. See [Rust editor support](doc/configuration.md#rust-editor-support).
+For Swift IntelliSense, enable nvim-lspconfig's SourceKit configuration in your
+editor; its defaults support standalone solution files.
+See [Swift editor support](doc/configuration.md#swift-editor-support).
 
 ## Install
 
@@ -152,6 +155,9 @@ nvim --headless -u NONE -l tests/local_runs.lua
 nvim --headless -u NONE -l tests/ui_state.lua
 MEATCODE_NO_SETUP=1 nvim --headless -u NONE -l tests/ui_state.lua
 MEATCODE_RUST_ANALYZER=/path/to/rust-analyzer nvim --headless -u NONE -l tests/rust_editor.lua
+nvim --headless -u NONE -l tests/submission.lua
+nvim --headless -u NONE -l tests/swift_submission.lua
+nvim --headless -u NONE -l tests/submission_languages.lua
 ```
 
 The runner check needs Python, Swift, Rust, and a supported sandbox. UI checks
@@ -163,6 +169,11 @@ to your plenary.nvim checkout when running `tests/ui_state.lua`.
 The Rust editor check additionally needs rust-analyzer and `rust-src`; it checks
 completion, compiler diagnostics, clean solution files, isolated helper types,
 and cross-provider Rust submission entry points.
+
+The submission checks compile/run real Swift, Rust, C++ and Python judge
+payloads. They cover provider method names, Swift labels/inout, reference and
+move-only arguments, existing entry points, recursion, literal/comment decoys,
+and rejection of incompatible signatures or future languages without adapters.
 
 ## TODO
 

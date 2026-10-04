@@ -153,21 +153,24 @@ function M.ensure_id(problem, name, cb)
   end)
 end
 
---- The content starter and the selected judge can name Rust's entry point
---- differently. Adapt only the submitted payload against the judge's metadata.
+--- Cross-provider function submissions use the judge's signature in every language.
+--- Adapt only the payload; unsupported adapters fail before any code is uploaded.
 function M.submit(problem, meta, code, lang, content_provider, submit_provider, cb)
   local backend = M.get(submit_provider)
-  if lang ~= "rust" or content_provider == submit_provider or meta.test_case_type == "class" then
+  if content_provider == submit_provider or meta.test_case_type == "class" then
     return backend.submit(problem, meta, code, lang, cb)
   end
   M.ensure_id(problem, submit_provider, function(err, id)
     if err or not id then return cb(err or "problem is unavailable on " .. backend.label, nil) end
     backend.fetch(problem, lang, function(fetch_err, judge)
       if fetch_err or not judge then
-        return cb(fetch_err or "could not load " .. backend.label .. "'s Rust starter", nil)
+        return cb(fetch_err or "could not load " .. backend.label .. "'s " .. require("meatcode.lang").name(lang) .. " starter", nil)
       end
-      local payload, adapt_err = require("meatcode.runner.rust").adapt_submission(
-        code, (meta.starterCode or {}).rust, (judge.starterCode or {}).rust)
+      if judge.test_case_type == "class" then
+        return cb("the submit judge requires a design-class API; use its starter", nil)
+      end
+      local payload, adapt_err = require("meatcode.submission").adapt(
+        code, lang, (meta.starterCode or {})[lang], (judge.starterCode or {})[lang])
       if not payload then return cb(adapt_err, nil) end
       backend.submit(problem, judge, payload, lang, cb)
     end)

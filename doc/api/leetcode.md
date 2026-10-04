@@ -161,11 +161,13 @@ LeetCode source is at hand, the adapter first resolves it by slug with
 `question(titleSlug) { questionId }` and keeps it for the session. A missing
 id sent as the string `"nil"` got an HTML HTTP 500 back.
 
-When a function-style Rust solution was opened from another provider, the
-submission path fetches LeetCode's full question metadata first and uses its
-starter to bridge compatible entry-point names. That response also supplies
-the internal question id. Adaptation only affects the payload, not the saved
-solution; it does not rename symbols throughout the user's code.
+When a function-style solution was opened from another provider, the submission
+path fetches LeetCode's full question metadata first and uses its starter to
+bridge compatible entry-point names through the language's submission adapter.
+That response also supplies the internal question id. Adaptation only affects
+the payload, not the saved solution or local-run entry point; it does not rename
+symbols throughout the user's code. Missing adapters or incompatible signatures
+stop submission before upload.
 
 Then poll until the judge finishes — on the same endpoint leetcode.com polls:
 
