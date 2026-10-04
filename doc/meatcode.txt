@@ -130,7 +130,7 @@ Solving ~
                         a foreground local run. The verdict names the provider
                         that judged it
   <leader>nR            Reset to the content provider's starter code
-  <leader>no            Fuzzy-pick a provider/solution/video link
+  <leader>no            Fuzzy-pick a provider/solution/submissions/video link
   <leader>nc            Reorder the content/submit fallback chains and choose
                         when the cloud oracle replaces local ones (<CR> on its
                         row). The provider actually serving the open problem

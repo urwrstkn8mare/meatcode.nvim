@@ -122,7 +122,7 @@ in that language; edits are saved automatically, with no save prompt.
 | `<leader>nt` | Edit the local test cases |
 | `<leader>na` | Add the last failed submission input as a case |
 | `<leader>nR` | Reset the solution to the starter code |
-| `<leader>no` | Open a provider/solution/video link |
+| `<leader>no` | Open a provider/solution/submissions/video link |
 | `<leader>nc` | Reorder the provider chains; choose when the cloud oracle judges |
 | `<CR>`/`<Tab>` | Open the hint, link or diagram under the cursor |
 | `q` | Close |

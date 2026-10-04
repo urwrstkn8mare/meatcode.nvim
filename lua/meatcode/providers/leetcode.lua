@@ -198,6 +198,7 @@ function M.links(problem)
   return {
     { label = "LeetCode", url = "https://leetcode.com/problems/" .. slug .. "/" },
     { label = "LeetCode solutions", url = "https://leetcode.com/problems/" .. slug .. "/solutions/" },
+    { label = "LeetCode submissions", url = "https://leetcode.com/problems/" .. slug .. "/submissions/" },
   }
 end
 
