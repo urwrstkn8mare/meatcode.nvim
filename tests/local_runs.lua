@@ -14,6 +14,14 @@ local function await_run(id,lang,code,starter,cases,outputs,kind)
   return report
 end
 local function run()
+  local answers=require('meatcode.runner.answers')
+  assert(answers.grade('{"items":{}}', {'{"items":[]}'} )=='fail',
+    'empty object field was graded as an empty list')
+  assert(answers.grade('[{},1]', {'[1,[]]'} )=='fail',
+    'unordered grading erased empty object/list distinctions')
+  assert(answers.grade('{"a":1,"b":[]}', {'{"b":[],"a":1}'} )=='pass',
+    'JSON object key order changed an exact verdict')
+  print('structured answer shapes and object key ordering passed')
   local system=vim.system
   local processes={}
   vim.system=function(...) local p=system(...);table.insert(processes,p);return p end

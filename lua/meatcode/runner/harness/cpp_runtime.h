@@ -11,23 +11,36 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <optional>
+#include <typeinfo>
 #include <queue>
 #include <sstream>
 #include <string>
 #include <vector>
-
+#include <typeindex>
+#include <stdexcept>
+#include <initializer_list>
+#include <cctype>
+#include <set>
+#include <type_traits>
+#include <utility>
+#include <new>
+#include <cmath>
+#include <limits>
 #include <unistd.h>
+
 
 namespace ncrt {
 
 // ---------------------------------------------------------------- JSON value
 
 struct JV {
-  enum Type { NUL, BOOL, NUM, STR, ARR } type = NUL;
+  enum Type { NUL, BOOL, NUM, STR, ARR, OBJ } type = NUL;
   bool b = false;
   double num = 0;
   std::string str;
   std::vector<JV> arr;
+  std::vector<std::pair<std::string, JV> > obj;
 };
 
 inline void skipWs(const std::string &s, size_t &i) {
@@ -70,19 +83,36 @@ inline JV parseValue(const std::string &s, size_t &i) {
   skipWs(s, i);
   JV v;
   if (i >= s.size()) return v;
-
   if (s[i] == '"') return parseString(s, i);
 
-  if (s[i] == '[') {
+  if (s[i] == '{') {
+    v.type = JV::OBJ;
+    i++;
+    skipWs(s, i);
+    if (i < s.size() && s[i] == '}') { i++; return v; }
+    while (i < s.size() && s[i] == '"') {
+      JV key = parseString(s, i);
+      skipWs(s, i);
+      if (i >= s.size() || s[i++] != ':') break;
+      v.obj.push_back(std::make_pair(key.str, parseValue(s, i)));
+      skipWs(s, i);
+      if (i < s.size() && s[i] == ',') { i++; skipWs(s, i); continue; }
+      if (i < s.size() && s[i] == '}') i++;
+      break;
+    }
+    return v;
+  }
+  if (s[i] == '[' || s[i] == '(') {
+    const char close = s[i] == '(' ? ')' : ']';
     v.type = JV::ARR;
     i++;
     skipWs(s, i);
-    if (i < s.size() && s[i] == ']') { i++; return v; }
+    if (i < s.size() && s[i] == close) { i++; return v; }
     while (i < s.size()) {
       v.arr.push_back(parseValue(s, i));
       skipWs(s, i);
       if (i < s.size() && s[i] == ',') { i++; continue; }
-      if (i < s.size() && s[i] == ']') { i++; break; }
+      if (i < s.size() && s[i] == close) { i++; break; }
       break;
     }
     return v;
@@ -120,6 +150,388 @@ inline JV parseJson(const std::string &s) {
   size_t i = 0;
   return parseValue(s, i);
 }
+inline const JV &field(const JV &v, const std::string &name, size_t index) {
+  static const JV empty;
+  if (v.type == JV::OBJ) {
+    for (const auto &entry : v.obj) if (entry.first == name) return entry.second;
+    throw std::runtime_error("record object is missing required field `" + name + "`");
+  }
+  return index < v.arr.size() ? v.arr[index] : empty;
+}
+
+struct ListNode;
+struct TreeNode;
+inline void conv(const JV &v, ListNode *&out);
+inline void conv(const JV &v, TreeNode *&out);
+inline JV to_value(ListNode *value);
+inline JV to_value(TreeNode *value);
+template <class T> inline void conv(const JV &, std::vector<T> &);
+template <class T> inline void conv(const JV &, std::optional<T> &);
+inline void conv(const JV &, std::vector<char> &);
+template <class T> inline JV to_value(const std::vector<T> &);
+template <class T> inline JV to_value(const std::optional<T> &);
+template <class T> inline JV to_value(const std::map<std::string, T> &);
+template <class T> inline JV to_value(const T &value);
+template <class T> struct Codec;
+template <class T> inline void conv(const JV &, std::map<std::string, T> &);
+template <class T> inline T from_json(const JV &);
+inline JV to_value(int);
+inline JV to_value(long);
+inline JV to_value(long long);
+inline JV to_value(unsigned);
+inline JV to_value(unsigned long);
+inline JV to_value(unsigned long long);
+inline JV to_value(double);
+inline JV to_value(float);
+inline JV to_value(bool);
+inline JV to_value(char);
+inline JV to_value(const std::string &);
+template <class T>
+inline typename std::enable_if<!std::is_same<T, ListNode>::value
+  && !std::is_same<T, TreeNode>::value, JV>::type to_value(T *const &);
+inline const JV &fieldOpt(const JV &v, const std::string &name, size_t index) {
+  static const JV empty;
+  if (v.type == JV::OBJ) {
+    for (const auto &entry : v.obj) if (entry.first == name) return entry.second;
+    return empty;
+  }
+  return index < v.arr.size() ? v.arr[index] : empty;
+}
+inline bool has_field(const JV &v, const char *name, size_t index) {
+  if (v.type == JV::OBJ) {
+    for (const auto &entry : v.obj) if (entry.first == name) return true;
+    return false;
+  }
+  return index < v.arr.size();
+}
+
+// Named-object field validation: unknown keys and duplicates fail; optional
+// fields may be omitted; the identity tags of reference-capable types are
+// skipped here and handled by the pointer codecs.
+inline void check_object(const JV &v, const char *type_name,
+                         std::initializer_list<const char *> names,
+                         std::initializer_list<const char *> optional_names) {
+  if (v.type != JV::OBJ) return;
+  for (const auto &entry : v.obj) {
+    if (entry.first == "$id" || entry.first == "$ref") continue;
+    bool known = false;
+    for (const char *n : names) if (entry.first == n) { known = true; break; }
+    if (!known) throw std::runtime_error(std::string("record ") + type_name + " has unknown field `" + entry.first + "`");
+    size_t count = 0;
+    for (const auto &other : v.obj) if (other.first == entry.first) count++;
+    if (count > 1) throw std::runtime_error(std::string("record ") + type_name + " has duplicate field `" + entry.first + "`");
+  }
+  for (const char *n : names) {
+    bool optional = false;
+    for (const char *o : optional_names) if (std::string(n) == o) { optional = true; break; }
+    if (optional) continue;
+    bool present = false;
+    for (const auto &entry : v.obj) if (entry.first == n) { present = true; break; }
+    if (!present) throw std::runtime_error(std::string("missing required field ") + type_name + "." + n);
+  }
+}
+
+// Identity tags must never appear where only a value record is expected.
+inline void reject_identity_tags(const JV &v, const char *type_name) {
+  if (v.type != JV::OBJ) return;
+  for (const auto &entry : v.obj) {
+    if (entry.first == "$id" || entry.first == "$ref")
+      throw std::runtime_error(std::string("identity tags are unsupported on value record ") + type_name);
+  }
+}
+template <class T>
+inline void destroy_owned(void *ptr) {
+  static_cast<T *>(ptr)->~T();
+  ::operator delete(ptr, std::align_val_t(alignof(T)));
+}
+
+// ------------------------------------------------------- identity registry
+//
+// One registry per case: `$id` definitions and `$ref` lookups share it across
+// all arguments and design operations of the case, then the drivers reset it
+// so nothing leaks between cases, between the user and reference blocks, or
+// across parallel workers (separate processes).
+struct Identity {
+  struct Entry {
+    void *ptr = nullptr;
+    const JV *definition = nullptr;
+    std::type_index type = std::type_index(typeid(void));
+    bool constructing = false;
+    bool filled = false;
+  };
+  std::map<std::string, Entry> by_id;
+  std::map<const void *, long long> encoded;
+  std::vector<std::pair<void *, void (*)(void *)> > owned;
+  long long next_id = 0;
+  bool identity_used = false;
+  bool graph_mode = false;
+  void reset() {
+    for (auto it = owned.rbegin(); it != owned.rend(); ++it) it->second(it->first);
+    owned.clear(); by_id.clear(); encoded.clear(); next_id = 0;
+    identity_used = false; graph_mode = false;
+  }
+  void verify() {
+    for (const auto &kv : by_id)
+      if (kv.second.ptr && !kv.second.filled)
+        throw std::runtime_error("unresolved identity reference to `" + kv.first + "`");
+  }
+};
+
+inline Identity &identity() { static Identity ctx; return ctx; }
+inline void reset_identity() { identity().reset(); }
+inline std::string identity_key(const JV &v, const char *what) {
+  if (v.type == JV::NUM && std::isfinite(v.num) && std::trunc(v.num) == v.num
+      && v.num >= -9223372036854775808.0 && v.num < 9223372036854775808.0)
+    return "i:" + std::to_string(static_cast<long long>(v.num));
+  if (v.type == JV::STR && !v.str.empty()) return "s:" + v.str;
+  throw std::runtime_error(std::string("identity ") + what + " must be a nonempty string or integer");
+}
+
+struct IdentityTags {
+  const JV *id = nullptr;
+  const JV *ref = nullptr;
+};
+inline IdentityTags identity_tags(const JV &v) {
+  IdentityTags tags;
+  for (const auto &entry : v.obj) {
+    if (entry.first == "$id") {
+      if (tags.id) throw std::runtime_error("identity object has duplicate `$id` tag");
+      tags.id = &entry.second;
+    } else if (entry.first == "$ref") {
+      if (tags.ref) throw std::runtime_error("identity object has duplicate `$ref` tag");
+      tags.ref = &entry.second;
+    }
+  }
+  if (tags.id && tags.ref)
+    throw std::runtime_error("identity object cannot carry both `$id` and `$ref`");
+  if (tags.ref && v.obj.size() != 1)
+    throw std::runtime_error("a `$ref` object must contain exactly one `$ref` field");
+  return tags;
+}
+
+// Index borrowed JSON definitions across the entire case before decoding any
+// argument. No graph subtree is copied; forward references eagerly construct
+// their indexed target before control enters a user method.
+inline void preindex(const JV &v) {
+  if (v.type == JV::OBJ) {
+    auto tags = identity_tags(v);
+    if (tags.id) {
+      auto key = identity_key(*tags.id, "id");
+      auto &entry = identity().by_id[key];
+      if (entry.definition && entry.definition != &v)
+        throw std::runtime_error("duplicate identity id `" + key + "`");
+      entry.definition = &v;
+    }
+    if (tags.ref) identity_key(*tags.ref, "reference");
+    for (const auto &entry : v.obj) preindex(entry.second);
+  } else if (v.type == JV::ARR) {
+    for (const JV &child : v.arr) preindex(child);
+  }
+}
+template <class Pairs>
+inline void preindex_args(const Pairs &args) {
+  for (const auto &arg : args) preindex(arg.second);
+}
+
+template <class T>
+inline T *identity_object(const std::string &key, const JV *definition) {
+  auto &entry = identity().by_id[key];
+  if (definition) {
+    if (entry.definition && entry.definition != definition)
+      throw std::runtime_error("duplicate identity id `" + key + "`");
+    entry.definition = definition;
+  }
+  if (!entry.definition)
+    throw std::runtime_error("unresolved identity reference to `" + key + "`");
+  if (entry.type != std::type_index(typeid(void))
+      && entry.type != std::type_index(typeid(T)))
+    throw std::runtime_error(std::string("identity reference has the wrong type: id `") + key
+      + "` is not a " + Codec<T>::name());
+  if (!entry.ptr) {
+    entry.ptr = ::operator new(sizeof(T), std::align_val_t(alignof(T)));
+    entry.type = std::type_index(typeid(T));
+  }
+  T *ptr = static_cast<T *>(entry.ptr);
+  if (!entry.filled && !entry.constructing) {
+    entry.constructing = true;
+    try { Codec<T>::construct(*entry.definition, entry.ptr); }
+    catch (...) {
+      ::operator delete(entry.ptr, std::align_val_t(alignof(T)));
+      entry.ptr = nullptr;
+      entry.constructing = false;
+      throw;
+    }
+    entry.filled = true;
+    entry.constructing = false;
+    identity().owned.emplace_back(entry.ptr, &destroy_owned<T>);
+  }
+  return ptr;
+}
+template <class T> struct IsVector : std::false_type {};
+template <class T, class A> struct IsVector<std::vector<T, A> > : std::true_type { using value_type = T; };
+template <class T> struct IsOptional : std::false_type {};
+template <class T> struct IsOptional<std::optional<T> > : std::true_type { using value_type = T; };
+template <class T> struct IsStringMap : std::false_type {};
+template <class T, class C, class A>
+struct IsStringMap<std::map<std::string, T, C, A> > : std::true_type { using value_type = T; };
+template <class T>
+inline void preindex_typed(const JV &v) {
+  using U = typename std::remove_cv<T>::type;
+  if constexpr (std::is_pointer<U>::value) {
+    using V = typename std::remove_cv<typename std::remove_pointer<U>::type>::type;
+    if constexpr (!std::is_same<V, ListNode>::value && !std::is_same<V, TreeNode>::value) {
+      // Null has no nested identity. Indexing it would re-enter this record's
+      // pointer fields forever (a null `next` is not another node).
+      if (v.type == JV::NUL) return;
+      if (v.type == JV::OBJ) {
+        const auto tags = identity_tags(v);
+        if (tags.id || tags.ref) {
+          const auto key = identity_key(tags.id ? *tags.id : *tags.ref,
+            tags.id ? "id" : "reference");
+          auto &entry = identity().by_id[key];
+          if (entry.type != std::type_index(typeid(void))
+              && entry.type != std::type_index(typeid(V)))
+            throw std::runtime_error("identity reference has the wrong type: id `" + key + "`");
+          entry.type = std::type_index(typeid(V));
+          if (tags.id) Codec<V>::preindex(v);
+          return;
+        }
+      }
+      if (v.type == JV::ARR || v.type == JV::OBJ) Codec<V>::preindex(v);
+    }
+  } else if constexpr (std::is_arithmetic<U>::value || std::is_same<U, std::string>::value) {
+    return;
+  } else if constexpr (std::is_same<U, std::vector<char>>::value) {
+    return;
+  } else if constexpr (IsVector<U>::value) {
+    if (v.type == JV::ARR)
+      for (const JV &child : v.arr) preindex_typed<typename IsVector<U>::value_type>(child);
+  } else if constexpr (IsOptional<U>::value) {
+    if (v.type != JV::NUL) preindex_typed<typename IsOptional<U>::value_type>(v);
+  } else if constexpr (IsStringMap<U>::value) {
+    if (v.type == JV::OBJ)
+      for (const auto &entry : v.obj) preindex_typed<typename IsStringMap<U>::value_type>(entry.second);
+  } else {
+    Codec<U>::preindex(v);
+  }
+}
+
+template <class T>
+inline void conv_ref(const JV &v, T *&out) {
+  if (v.type == JV::NUL) { out = nullptr; return; }
+  if (v.type != JV::OBJ && v.type != JV::ARR)
+    throw std::runtime_error("reference-capable record input must be an array or object");
+  auto tags = identity_tags(v);
+  if (tags.id || tags.ref) {
+    identity().identity_used = true;
+    out = identity_object<T>(identity_key(tags.id ? *tags.id : *tags.ref,
+      tags.id ? "id" : "reference"), tags.id ? &v : nullptr);
+    return;
+  }
+  void *storage = ::operator new(sizeof(T), std::align_val_t(alignof(T)));
+  try { Codec<T>::construct(v, storage); }
+  catch (...) { ::operator delete(storage, std::align_val_t(alignof(T))); throw; }
+  identity().owned.emplace_back(storage, &destroy_owned<T>);
+  out = static_cast<T *>(storage);
+}
+
+struct ListNode;
+struct TreeNode;
+struct WalkState {
+  std::vector<const void *> encountered;
+  std::set<const void *> expanded;
+};
+template <class T, class = void> struct HasCodecWalk : std::false_type {};
+template <class T>
+struct HasCodecWalk<T, std::void_t<decltype(Codec<T>::walk(
+  static_cast<const T *>(nullptr), std::declval<WalkState &>()))> > : std::true_type {};
+
+inline void walk_references(ListNode *, WalkState &) {}
+inline void walk_references(TreeNode *, WalkState &) {}
+template <class T>
+inline void walk_references(T *ptr, WalkState &state) {
+  // `const Token*` and `Token*` share one codec. Deduction keeps the const
+  // on T, and there is no Codec<const Token> specialization.
+  using U = std::remove_cv_t<T>;
+  if (!ptr) return;
+  state.encountered.push_back(ptr);
+  if (!state.expanded.insert(ptr).second) return;
+  Codec<U>::walk(ptr, state);
+}
+template <class T>
+inline typename std::enable_if<HasCodecWalk<T>::value>::type
+walk_references(const T &value, WalkState &state) {
+  Codec<T>::walk(&value, state);
+}
+template <class T>
+inline typename std::enable_if<!HasCodecWalk<T>::value>::type
+walk_references(const T &, WalkState &) {}
+template <class T> inline void walk_references(const std::vector<T> &, WalkState &);
+template <class T> inline void walk_references(const std::optional<T> &, WalkState &);
+template <class T> inline void walk_references(const std::map<std::string, T> &, WalkState &);
+template <class T>
+inline void walk_references(const std::vector<T> &values, WalkState &state) {
+  for (const T &value : values) walk_references(value, state);
+}
+template <class T>
+inline void walk_references(const std::optional<T> &value, WalkState &state) {
+  if (value) walk_references(*value, state);
+}
+template <class T>
+inline void walk_references(const std::map<std::string, T> &values, WalkState &state) {
+  for (const auto &entry : values) walk_references(entry.second, state);
+}
+template <class T>
+inline bool identity_sharing(const T &value) {
+  WalkState state;
+  walk_references(value, state);
+  std::map<const void *, int> counts;
+  for (const void *ptr : state.encountered) counts[ptr]++;
+  for (const auto &entry : counts) {
+    if (entry.second > 1 || identity().encoded.count(entry.first)) return true;
+  }
+  return false;
+}
+template <class T>
+inline void conv(const JV &v, T *&out) { conv_ref(v, out); }
+
+
+// Positional serialization of a nested custom pointer field (used when the
+// case runs in positional mode). The pointed-to record serializes as a
+// positional array; null serializes as JSON null.
+template <class T>
+inline JV to_value_pos(T *const &ptr) {
+  if (!ptr) return JV();
+  return Codec<std::remove_cv_t<T>>::encode(*ptr);
+}
+inline std::string render(const JV &v);
+
+// Graph-mode encoding of a nested custom pointer field: canonical integer
+// `$id` values in first-encounter order, repeats as `{"$ref":n}`.
+template <class T>
+inline JV to_value_ref(T *const &ptr) { return Codec<std::remove_cv_t<T>>::encode_ref(ptr); }
+template <class T>
+inline typename std::enable_if<!std::is_same<T, ListNode>::value
+  && !std::is_same<T, TreeNode>::value, JV>::type
+to_value(T *const &ptr) {
+  return identity().graph_mode ? to_value_ref(ptr) : to_value_pos(ptr);
+}
+
+
+
+// Encode a pointer of record type T. The whole return value runs in ONE
+// global mode: identity (id/ref objects) when the case carried explicit
+// input ids or the graph has sharing/cycles, else plain positional arrays.
+template <class T>
+inline std::string tj_ref(const T *ptr) {
+  if (!ptr) return "null";
+  bool graph = identity().identity_used || identity_sharing(ptr);
+  identity().graph_mode = graph;
+  JV v = graph ? Codec<T>::encode_ref(ptr) : Codec<T>::encode(*ptr);
+  identity().graph_mode = false;
+  return render(v);
+}
+
 
 using Args = std::vector<std::pair<std::string, JV> >;
 
@@ -203,6 +615,7 @@ struct TreeNode {
   TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}
   TreeNode(int x, TreeNode *l, TreeNode *r) : val(x), left(l), right(r) {}
 };
+
 
 inline ListNode *buildList(const JV &v) {
   ListNode *head = nullptr;
@@ -288,16 +701,69 @@ inline void conv(const JV &v, std::string &out) { out = asStr(v); }
 inline void conv(const JV &v, ListNode *&out) { out = buildList(v); }
 inline void conv(const JV &v, TreeNode *&out) { out = buildTree(v); }
 
+// Factories construct values directly, including non-default-constructible
+// records and immutable fields. Container elements never need T{} or assignment.
+template <class T, class = void> struct JsonFactory {
+  static T decode(const JV &v) { return Codec<T>::decode(v); }
+};
 template <class T>
-inline void conv(const JV &v, std::vector<T> &out) {
-  out.clear();
-  out.reserve(v.arr.size());
-  for (const JV &e : v.arr) {
-    T item;
-    conv(e, item);
-    out.push_back(item);
+struct JsonFactory<T, std::enable_if_t<std::is_arithmetic<T>::value
+  || std::is_same<T, std::string>::value>> {
+  static T decode(const JV &v) { T out{}; conv(v, out); return out; }
+};
+template <class T> struct JsonFactory<T *> {
+  static T *decode(const JV &v) {
+    T *out = nullptr;
+    conv(v, out);
+    return out;
   }
+};
+template <class T> struct JsonFactory<std::vector<T>> {
+  static std::vector<T> decode(const JV &v) {
+    if (v.type != JV::ARR) throw std::runtime_error("vector input must be an array");
+    std::vector<T> out;
+    out.reserve(v.arr.size());
+    for (const JV &child : v.arr) out.emplace_back(from_json<T>(child));
+    return out;
+  }
+};
+template <> struct JsonFactory<std::vector<char>> {
+  static std::vector<char> decode(const JV &v) {
+    std::vector<char> out;
+    conv(v, out);
+    return out;
+  }
+};
+template <class T> struct JsonFactory<std::optional<T>> {
+  static std::optional<T> decode(const JV &v) {
+    if (v.type == JV::NUL) return std::nullopt;
+    return std::optional<T>(std::in_place, from_json<T>(v));
+  }
+};
+template <class T> struct JsonFactory<std::map<std::string, T>> {
+  static std::map<std::string, T> decode(const JV &v) {
+    if (v.type != JV::OBJ) throw std::runtime_error("map input must be an object");
+    std::map<std::string, T> out;
+    for (const auto &entry : v.obj)
+      if (!out.emplace(entry.first, from_json<T>(entry.second)).second)
+        throw std::runtime_error("map input has duplicate key `" + entry.first + "`");
+    return out;
+  }
+};
+template <class T> inline T from_json(const JV &v) { return JsonFactory<T>::decode(v); }
+template <class T> inline void conv(const JV &v, T &out) { out = from_json<T>(v); }
+template <class T>
+inline void conv(const JV &v, std::vector<T> &out) { out = from_json<std::vector<T>>(v); }
+template <class T>
+inline void conv(const JV &v, std::optional<T> &out) {
+  out.reset();
+  if (v.type != JV::NUL) out.emplace(from_json<T>(v));
 }
+template <class T>
+inline void conv(const JV &v, std::map<std::string, T> &out) {
+  out = from_json<std::map<std::string, T>>(v);
+}
+
 
 // A vector<char> is encoded as a JSON string when it stands for a word.
 inline void conv(const JV &v, std::vector<char> &out) {
@@ -310,6 +776,10 @@ inline void conv(const JV &v, std::vector<char> &out) {
 }
 
 // ------------------------------------------------------------ native -> JSON
+
+inline std::string tj(const std::string &v);
+inline std::string render(const JV &v);
+template <class T> inline std::string tj(const T &v);
 
 inline std::string tj(int v) { return std::to_string(v); }
 inline std::string tj(long v) { return std::to_string(v); }
@@ -382,6 +852,62 @@ inline std::string tj(const std::vector<T> &v) {
   }
   return out + "]";
 }
+inline std::string render(const JV &v);
+inline JV to_value(int v) { JV x; x.type=JV::NUM; x.num=v; return x; }
+inline JV to_value(long v) { JV x; x.type=JV::NUM; x.num=v; return x; }
+inline JV to_value(long long v) { JV x; x.type=JV::NUM; x.num=(double)v; return x; }
+inline JV to_value(unsigned v) { JV x; x.type=JV::NUM; x.num=v; return x; }
+inline JV to_value(unsigned long v) { JV x; x.type=JV::NUM; x.num=v; return x; }
+inline JV to_value(unsigned long long v) { JV x; x.type=JV::NUM; x.num=(double)v; return x; }
+inline JV to_value(double v) { JV x; x.type=JV::NUM; x.num=v; return x; }
+inline JV to_value(float v) { return to_value((double)v); }
+inline JV to_value(bool v) { JV x; x.type=JV::BOOL; x.b=v; return x; }
+inline JV to_value(const std::string &v) { JV x; x.type=JV::STR; x.str=v; return x; }
+inline JV to_value(char v) { JV x; x.type=JV::STR; x.str.push_back(v); return x; }
+template <class T> inline JV to_value(const std::vector<T> &v) {
+  JV x; x.type=JV::ARR; x.arr.reserve(v.size());
+  for (const T &e : v) x.arr.push_back(to_value(e));
+  return x;
+}
+
+// Linked/tree nodes keep the existing positional encodings ([1,2,3] and
+// level order), so a ListNode*/TreeNode* field inside a record serializes
+// exactly like a top-level argument does.
+inline JV to_value(ListNode *n) {
+  JV x; x.type = JV::ARR;
+  int guard = 0;
+  for (; n && guard < 100000; n = n->next, guard++) x.arr.push_back(to_value(n->val));
+  return x;
+}
+inline JV to_value(TreeNode *root) {
+  JV x; x.type = JV::ARR;
+  if (root) {
+    std::queue<TreeNode *> q;
+    q.push(root);
+    while (!q.empty()) {
+      TreeNode *n = q.front(); q.pop();
+      if (!n) { x.arr.push_back(JV()); continue; }
+      x.arr.push_back(to_value(n->val));
+      q.push(n->left);
+      q.push(n->right);
+    }
+    while (!x.arr.empty() && x.arr.back().type == JV::NUL) x.arr.pop_back();
+  }
+  return x;
+}
+
+template <class T>
+inline JV to_value(const std::optional<T> &v) { return v ? to_value(*v) : JV(); }
+
+template <class T>
+inline JV to_value(const std::map<std::string, T> &m) {
+  JV x; x.type = JV::OBJ;
+  for (const auto &entry : m) x.obj.push_back(std::make_pair(entry.first, to_value(entry.second)));
+  return x;
+}
+template <class T> inline JV to_value(const T &v) { return Codec<T>::encode(v); }
+template <class T> inline std::string tj(const T &v) { return render(to_value(v)); }
+
 
 // Re-serialise parsed JSON the way `tj` writes it, so an answer copied out of a
 // problem statement ("[0, 1]") compares equal to a solution's output ("[0,1]").
@@ -399,35 +925,72 @@ inline std::string render(const JV &v) {
       }
       return out + "]";
     }
+    case JV::OBJ: {
+      std::string out = "{";
+      for (size_t i = 0; i < v.obj.size(); i++) {
+        if (i) out += ",";
+        out += tj(v.obj[i].first) + ":" + render(v.obj[i].second);
+      }
+      return out + "}";
+    }
   }
   return "null";
 }
 
+template <class T>
+inline std::string tj_graph(const T &value) {
+  const bool graph = identity().identity_used || identity_sharing(value);
+  identity().graph_mode = graph;
+  JV encoded = to_value(value);
+  identity().graph_mode = false;
+  return render(encoded);
+}
+
+inline JV sortedObjects(JV value) {
+  for (JV &child : value.arr) child = sortedObjects(child);
+  for (auto &entry : value.obj) entry.second = sortedObjects(entry.second);
+  std::sort(value.obj.begin(), value.obj.end(),
+    [](const std::pair<std::string, JV> &a, const std::pair<std::string, JV> &b) {
+      return a.first < b.first;
+    });
+  return value;
+}
+
 // Order-insensitive form, used only to explain a near miss.
-inline std::string canonical(const std::string &json) {
-  JV v = parseJson(json);
-  if (v.type != JV::ARR) return json;
-  std::vector<std::string> parts;
-  for (const JV &e : v.arr) {
-    size_t i = 0;
-    (void)i;
-    if (e.type == JV::ARR) {
-      std::vector<std::string> inner;
-      for (const JV &x : e.arr) inner.push_back(x.type == JV::STR ? tj(x.str) : tj(x.num));
-      std::sort(inner.begin(), inner.end());
-      std::string s = "[";
-      for (size_t k = 0; k < inner.size(); k++) { if (k) s += ","; s += inner[k]; }
-      parts.push_back(s + "]");
-    } else if (e.type == JV::STR) {
-      parts.push_back(tj(e.str));
-    } else {
-      parts.push_back(tj(e.num));
+inline std::string canonical_value(const JV &v) {
+  if (v.type == JV::ARR) {
+    std::vector<std::string> parts;
+    parts.reserve(v.arr.size());
+    for (const JV &child : v.arr) parts.push_back(canonical_value(child));
+    std::sort(parts.begin(), parts.end());
+    std::string out = "[";
+    for (size_t i = 0; i < parts.size(); i++) {
+      if (i) out += ",";
+      out += parts[i];
     }
+    return out + "]";
   }
-  std::sort(parts.begin(), parts.end());
-  std::string s = "[";
-  for (size_t i = 0; i < parts.size(); i++) { if (i) s += ","; s += parts[i]; }
-  return s + "]";
+  if (v.type == JV::OBJ) {
+    std::vector<std::pair<std::string, std::string> > fields;
+    fields.reserve(v.obj.size());
+    for (const auto &entry : v.obj)
+      fields.push_back(std::make_pair(entry.first, canonical_value(entry.second)));
+    std::sort(fields.begin(), fields.end(),
+      [](const std::pair<std::string, std::string> &a, const std::pair<std::string, std::string> &b) {
+        return a.first < b.first;
+      });
+    std::string out = "{";
+    for (size_t i = 0; i < fields.size(); i++) {
+      if (i) out += ",";
+      out += tj(fields[i].first) + ":" + fields[i].second;
+    }
+    return out + "}";
+  }
+  return render(v);
+}
+
+inline std::string canonical(const std::string &json) {
+  return canonical_value(parseJson(json));
 }
 
 // Grade `actual` against a list of acceptable rendered answers, implementing
@@ -441,8 +1004,9 @@ inline std::string judge(const std::string &actual,
                           std::string &expected) {
   if (answers.empty()) return "no_oracle";
   expected = answers[0];
+  const std::string actualExact = render(sortedObjects(parseJson(actual)));
   for (const std::string &ans : answers) {
-    if (actual == ans) { expected = ans; return "pass"; }
+    if (actualExact == render(sortedObjects(parseJson(ans)))) { expected = ans; return "pass"; }
   }
   std::string actualCanon = canonical(actual);
   for (const std::string &ans : answers) {

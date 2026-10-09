@@ -191,12 +191,18 @@ failed submission discloses an answer, the local oracle is rechecked in the
 background; a failure blacklists it and advances to the next candidate.
 
 Both `function` and `class` problems run locally in Python, C++, Swift and Rust.
-Swift and Rust support scalars, nested arrays/Vecs, standard ListNode/TreeNode
-types, in-place mutable arguments, design methods and codec round trips.
-Rust uses only rustc and its standard library; no Cargo setup or crate fetches.
-Custom node definitions and unsupported signatures fall back to the judge.
-Python/C++ additionally cover helper classes such as Interval and their
-documented reference encodings; see doc/local-runs.md for detailed limits.
+All four support scalars, nested collections, string-key maps, optional fields,
+standard ListNode/TreeNode types, custom records, in-place mutable arguments,
+design methods and codec round trips. Rust uses only rustc and its standard
+library; no Cargo setup or crate fetches.
+Custom helpers/codecs are recovered from declarations into scratch harnesses,
+never added to your solution or submitted code. Records accept positional
+arrays/tuples and named objects; returns use constructor/field positional order.
+Reference-capable custom records support explicit $id/$ref identity objects,
+including forward references, sharing and representable cycles, isolated per
+case. Output identities use canonical integer IDs starting at 1.
+Opaque adjacency/index encodings, unsafe constructor mappings and unsupported
+schemas retain cloud fallback. See doc/local-runs.md for precise boundaries.
 
 Design problems (Min Stack, LRU Cache, Trie, ...) replay their call sequence
 against the selected executable class, or compare it with a known answer list.
@@ -228,8 +234,7 @@ resources are not cgroup-limited.
 
 Problems that cannot be reproduced locally — SQL, and anything encoding
 arguments by reference such as clone-graph's adjacency list — run entirely on
-the submit judge's test run. C++ additionally cannot take vector<Interval>,
-which Python handles.
+the submit judge's test run.
 
 Use <leader>nt to add/remove local cases in an editor. Save with :w and close
 with :q. Solution edits are autosaved as you type, so switching languages,

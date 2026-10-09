@@ -229,6 +229,7 @@ local function equal(a, b)
   end
   if type(a) ~= type(b) then return false end
   if type(a) ~= "table" then return a == b end
+  if vim.islist(a) ~= vim.islist(b) then return false end
   for k, v in pairs(a) do
     if not equal(v, b[k]) then return false end
   end
@@ -241,7 +242,7 @@ end
 --- Order-insensitive form: every list sorted by its encoding, recursively.
 local function canonical(value)
   if type(value) ~= "table" then return value end
-  local out = {}
+  local out = vim.islist(value) and {} or vim.empty_dict()
   for k, v in pairs(value) do out[k] = canonical(v) end
   if vim.islist(out) then
     table.sort(out, function(x, y) return vim.json.encode(x) < vim.json.encode(y) end)

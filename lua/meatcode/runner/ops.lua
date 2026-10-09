@@ -26,7 +26,7 @@ local function take(toks, i, params)
   end
   local tok = toks[i]
 
-  if type(tok) ~= "table" then
+  if type(tok) ~= "table" or not vim.islist(tok) then
     return { tok }, i + 1
   end
 
@@ -107,8 +107,8 @@ function M.normalize(raw, spec)
   return ops, nil
 end
 
---- JSON encoder that treats every table as an array. `vim.json.encode` renders
---- an empty table as `{}`, which both harnesses would read as an object.
+--- Encode lists (including plain empty tables) and named JSON objects without
+--- losing the object fields in design-operation arguments.
 local function encode(v)
   if v == nil or v == vim.NIL then
     return "null"
@@ -127,6 +127,14 @@ local function encode(v)
     return vim.json.encode(v)
   end
   local parts = {}
+  if not vim.islist(v) then
+    local keys = vim.tbl_keys(v)
+    table.sort(keys)
+    for _, key in ipairs(keys) do
+      parts[#parts + 1] = vim.json.encode(key) .. ":" .. encode(v[key])
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+  end
   for idx = 1, #v do
     parts[idx] = encode(v[idx])
   end
@@ -171,24 +179,84 @@ local function split_params(s)
   return parts
 end
 
+-- Keep declaration offsets and indentation while removing comments and string
+-- literals; documented helper classes must not become the design entry point.
+local function python_declarations(source)
+  local out, i = {}, 1
+  while i <= #source do
+    local c = source:sub(i, i)
+    if c == "#" then
+      local stop = source:find("\n", i, true) or (#source + 1)
+      out[#out + 1] = string.rep(" ", stop - i)
+      i = stop
+    elseif c == '"' or c == "'" then
+      local quote = source:sub(i, i + 2) == c:rep(3) and c:rep(3) or c
+      out[#out + 1] = string.rep(" ", #quote)
+      i = i + #quote
+      while i <= #source do
+        if source:sub(i, i) == "\\" then
+          out[#out + 1] = " "
+          i = i + 1
+          if i <= #source then
+            out[#out + 1] = source:sub(i, i) == "\n" and "\n" or " "
+            i = i + 1
+          end
+        elseif source:sub(i, i + #quote - 1) == quote then
+          out[#out + 1] = string.rep(" ", #quote)
+          i = i + #quote
+          break
+        else
+          out[#out + 1] = source:sub(i, i) == "\n" and "\n" or " "
+          i = i + 1
+        end
+      end
+    else
+      out[#out + 1] = c
+      i = i + 1
+    end
+  end
+  return table.concat(out)
+end
+
 --- Read a class's arities out of Python starter code.
 ---@return table|nil spec, string|nil err
-function M.python_spec(starter)
+function M.python_spec(starter, target)
   if not starter or starter == "" then
     return nil, "no Python starter code to derive the class shape from"
   end
-  local name = starter:match("class%s+([%w_]+)")
-  if not name then
-    return nil, "could not find a class in the starter code"
+  local source = python_declarations(starter)
+  local classes = {}
+  local offset = 1
+  for line in (source .. "\n"):gmatch("([^\n]*)\n") do
+    local name = line:match("^class%s+([%w_]+)")
+    if name then classes[#classes + 1] = { name = name, start = offset } end
+    offset = offset + #line + 1
   end
+  local chosen, body, original
+  for i, class in ipairs(classes) do
+    local text = source:sub(class.start, classes[i + 1] and classes[i + 1].start - 1 or #source)
+    if (target and class.name == target) or (not target and text:match("def%s+[^_%s][%w_]*%s*%(")) then
+      chosen, body = class.name, text
+      original = starter:sub(class.start, class.start + #text - 1)
+    end
+  end
+  if not chosen then return nil, "could not find the design class in the starter code" end
 
-  local spec = { name = name, ctor = {}, methods = {} }
-  for method, params in starter:gmatch("def%s+([%w_]+)%s*%(([^%)]*)%)") do
+  local spec = { name = chosen, ctor = {}, methods = {} }
+  local scalar = { int = true, float = true, bool = true, str = true, bytes = true, Any = true }
+  local cursor = 1
+  while true do
+    local start, finish, method = body:find("def%s+([%w_]+)%s*%(([^%)]*)%)", cursor)
+    if not start then break end
+    local params = original:sub(start, finish):match("%((.*)%)")
+    cursor = finish + 1
     local flags = {}
     for _, part in ipairs(split_params(params)) do
       part = vim.trim(part)
       if part ~= "" and part ~= "self" then
-        table.insert(flags, part:find("[Ll]ist") ~= nil)
+        local annotation = vim.trim((part:match(":%s*(.-)%s*=") or part:match(":%s*(.*)$") or ""))
+        annotation = annotation:match('^"(.*)"$') or annotation:match("^'(.*)'$") or annotation
+        table.insert(flags, annotation ~= "" and not scalar[annotation])
       end
     end
     if method == "__init__" then

@@ -1,9 +1,8 @@
-use std::{cell::RefCell, env, fs, io::Write, os::fd::AsRawFd, rc::Rc, time::Instant};
-use std::collections::VecDeque;
+use std::{any::{Any,TypeId}, cell::RefCell, collections::{BTreeMap,HashMap,HashSet,VecDeque}, env, fs, io::Write, os::fd::AsRawFd, rc::Rc, time::Instant};
 use std::fmt::Write as FormatWrite;
 
 #[derive(Clone, Debug)]
-enum Json { Null, Bool(bool), Number(String), String(String), Array(Vec<Json>) }
+enum Json { Null, Bool(bool), Number(String), String(String), Array(Vec<Json>), Object(BTreeMap<String,Json>), Reference(String) }
 
 struct Parser<'a> { bytes: &'a [u8], pos: usize }
 impl<'a> Parser<'a> {
@@ -98,6 +97,18 @@ impl<'a> Parser<'a> {
                 }
                 Ok(Json::Array(values))
             }
+            Some(b'{') => {
+                self.pos += 1; let mut values=BTreeMap::new();
+                if self.take(b'}') { return Ok(Json::Object(values)); }
+                loop {
+                    let key=self.string()?;
+                    if !self.take(b':') { return Err("expected an object colon".into()); }
+                    if values.insert(key,self.value()?).is_some() { return Err("duplicate JSON object key".into()); }
+                    if self.take(b'}') { break; }
+                    if !self.take(b',') { return Err("expected an object comma".into()); }
+                }
+                Ok(Json::Object(values))
+            }
             Some(b'-' | b'0'..=b'9') => self.number(),
             _ => Err("unsupported or invalid JSON value".into()),
         }
@@ -125,12 +136,125 @@ fn array(value: Json) -> Result<Vec<Json>, String> {
     match value { Json::Array(values) => Ok(values), _ => Err("expected an array".into()) }
 }
 fn arguments(value: Json) -> Result<Vec<Json>, String> {
-    array(value)?.into_iter().map(|value| match value {
+    let mut values=array(value)?.into_iter().map(|value| match value {
         Json::String(raw) => parse(&raw), _ => Err("expected raw JSON argument text".into()),
-    }).collect()
+    }).collect::<Result<Vec<_>,_>>()?;
+    initialize_graph(&mut values)?;Ok(values)
 }
 trait FromJson: Sized { fn from_json(value: Json) -> Result<Self, String>; }
-trait ToJson { fn to_json(&self, output: &mut String); }
+trait ToJson {
+    const HAS_REFERENCES: bool = false;
+    fn to_json(&self, output: &mut String);
+    fn shared_reference(&self, _seen: &mut HashSet<(TypeId,usize)>) -> bool { false }
+}
+trait GraphRecord: FromJson + ToJson + 'static {
+    fn graph_empty() -> Self;
+    fn graph_populate(&mut self, fields:BTreeMap<String,Json>)->Result<(),String>;
+    fn graph_fields(&self, output:&mut String);
+}
+enum Emit { Positional, Ref(usize), Id(usize) }
+struct DecodeContext {
+    definitions:BTreeMap<String,BTreeMap<String,Json>>, objects:HashMap<String,Box<dyn Any>>,
+    output:HashMap<(TypeId,usize),(usize,Box<dyn Any>)>, graph:bool, next_output:usize,
+}
+impl DecodeContext { fn new()->Self { Self { definitions:BTreeMap::new(),objects:HashMap::new(),output:HashMap::new(),graph:false,next_output:1 } } }
+thread_local! {
+    static CODEC_CONTEXT: RefCell<DecodeContext> = RefCell::new(DecodeContext::new());
+}
+fn identity_id(value:&Json)->Result<String,String> {
+    match value {
+        Json::String(s) if !s.is_empty()=>Ok(format!("s:{}",s)),
+        Json::Number(s) if !s.contains('.')&&!s.contains('e')&&!s.contains('E')=>s.parse::<i128>().map(|n|format!("n:{}",n)).map_err(|_|"invalid identity integer".into()),
+        _=>Err("identity must be a nonempty string or integer".into()),
+    }
+}
+fn index_graph(value:&mut Json,context:&mut DecodeContext)->Result<(),String> {
+    let current=std::mem::replace(value,Json::Null);
+    match current {
+        Json::Array(mut values)=>{
+            for child in &mut values { index_graph(child,context)?; }
+            *value=Json::Array(values);
+        }
+        Json::Object(mut values)=>{
+            if values.contains_key("$id") && values.contains_key("$ref") { return Err("object cannot contain both $id and $ref".into()); }
+            if let Some(id)=values.get("$id") {
+                let key=identity_id(id)?;
+                for (name,child) in values.iter_mut() { if name!="$id" { index_graph(child,context)?; } }
+                values.remove("$id");
+                if context.definitions.insert(key.clone(),values).is_some() { return Err("duplicate identity id".into()); }
+                context.graph=true;
+                *value=Json::Reference(key);
+            } else if values.contains_key("$ref") {
+                if values.len()!=1 { return Err("a reference object must contain only $ref".into()); }
+                let key=identity_id(values.get("$ref").unwrap())?;
+                context.graph=true;
+                *value=Json::Reference(key);
+            } else {
+                for child in values.values_mut() { index_graph(child,context)?; }
+                *value=Json::Object(values);
+            }
+        }
+        value_json=>*value=value_json,
+    }
+    Ok(())
+}
+fn initialize_graph(values:&mut [Json])->Result<(),String> {
+    CODEC_CONTEXT.with(|slot| { let mut context=slot.borrow_mut();*context=DecodeContext::new();
+        for value in values { index_graph(value,&mut context)?; }Ok(()) })
+}
+fn graph_resolve<T:GraphRecord>(id:String)->Result<Rc<RefCell<T>>,String> {
+    let (target,definition)=CODEC_CONTEXT.with(|slot| -> Result<(Rc<RefCell<T>>,Option<BTreeMap<String,Json>>),String> {
+        let mut context=slot.borrow_mut();
+        if let Some(value)=context.objects.get(&id) {
+            let target=value.downcast_ref::<Rc<RefCell<T>>>().ok_or("identity reference has the wrong type")?.clone();
+            return Ok((target,None));
+        }
+        let definition=context.definitions.remove(&id).ok_or("unresolved identity reference")?;
+        let target=Rc::new(RefCell::new(T::graph_empty()));
+        context.objects.insert(id,Box::new(target.clone()));
+        Ok((target,Some(definition)))
+    })?;
+    if let Some(fields)=definition { target.borrow_mut().graph_populate(fields)?; }
+    Ok(target)
+}
+impl<T:GraphRecord> FromJson for Rc<RefCell<T>> {
+    fn from_json(value:Json)->Result<Self,String> {
+        match value {
+            Json::Reference(id)=>graph_resolve::<T>(id),
+            Json::Object(fields) if fields.contains_key("$id") && fields.contains_key("$ref")=>Err("object cannot contain both $id and $ref".into()),
+            Json::Object(fields) if fields.contains_key("$ref")=>{
+                if fields.len()!=1 { return Err("a reference object must contain only $ref".into()); }
+                graph_resolve::<T>(identity_id(fields.get("$ref").unwrap())?)
+            }
+            Json::Object(fields) if fields.contains_key("$id")=>graph_resolve::<T>(identity_id(fields.get("$id").unwrap())?),
+            value=>T::from_json(value).map(|value|Rc::new(RefCell::new(value))),
+        }
+    }
+}
+impl<T:GraphRecord> ToJson for Rc<RefCell<T>> {
+    const HAS_REFERENCES: bool = true;
+    fn shared_reference(&self, seen:&mut HashSet<(TypeId,usize)>) -> bool {
+        let key=(TypeId::of::<T>(),Rc::as_ptr(self) as usize);
+        !seen.insert(key) || self.borrow().shared_reference(seen)
+    }
+    fn to_json(&self,output:&mut String) {
+        let address=Rc::as_ptr(self) as usize;
+        let emit=CODEC_CONTEXT.with(|slot| {
+            let mut context=slot.borrow_mut();
+            let key=(TypeId::of::<T>(),address);
+            if !context.graph { return Emit::Positional; }
+            if let Some((id,_))=context.output.get(&key) { return Emit::Ref(*id); }
+            let id=context.next_output;context.next_output+=1;
+            context.output.insert(key,(id,Box::new(self.clone())));
+            Emit::Id(id)
+        });
+        match emit {
+            Emit::Positional=>self.borrow().to_json(output),
+            Emit::Ref(id)=>{output.push_str("{\"$ref\":");id.to_json(output);output.push('}');}
+            Emit::Id(id)=>{output.push_str("{\"$id\":");id.to_json(output);self.borrow().graph_fields(output);output.push('}');}
+        }
+    }
+}
 macro_rules! numbers {
     ($($ty:ty),*) => { $(
         impl FromJson for $ty {
@@ -156,11 +280,48 @@ impl FromJson for char {
 impl ToJson for char { fn to_json(&self,output:&mut String) { let mut bytes=[0;4];quote_into(output,self.encode_utf8(&mut bytes)); } }
 impl<T:FromJson> FromJson for Vec<T> { fn from_json(value:Json)->Result<Self,String> { array(value)?.into_iter().map(T::from_json).collect() } }
 impl<T:ToJson> ToJson for Vec<T> {
+    const HAS_REFERENCES: bool = T::HAS_REFERENCES;
+    fn shared_reference(&self, seen:&mut HashSet<(TypeId,usize)>) -> bool {
+        T::HAS_REFERENCES && self.iter().any(|value|value.shared_reference(seen))
+    }
     fn to_json(&self,output:&mut String) {
         output.push('[');for (i,value) in self.iter().enumerate() { if i>0 { output.push(','); } value.to_json(output); }output.push(']');
     }
 }
-fn encoded<T:ToJson>(value:&T)->String { let mut output=String::new();value.to_json(&mut output);output }
+fn encoded<T:ToJson>(value:&T)->String {
+    if T::HAS_REFERENCES && !CODEC_CONTEXT.with(|slot|slot.borrow().graph)
+        && value.shared_reference(&mut HashSet::new()) {
+        CODEC_CONTEXT.with(|slot|slot.borrow_mut().graph=true);
+    }
+    let mut output=String::new();
+    value.to_json(&mut output);
+    output
+}
+impl<T:FromJson> FromJson for Box<T> {
+    fn from_json(value:Json)->Result<Self,String> { T::from_json(value).map(Box::new) }
+}
+impl<T:ToJson> ToJson for Box<T> {
+    const HAS_REFERENCES: bool = T::HAS_REFERENCES;
+    fn to_json(&self,output:&mut String) { (**self).to_json(output); }
+    fn shared_reference(&self,seen:&mut HashSet<(TypeId,usize)>)->bool { (**self).shared_reference(seen) }
+}
+impl<T:FromJson> FromJson for BTreeMap<String,T> {
+    fn from_json(value:Json)->Result<Self,String> {
+        match value { Json::Object(values)=>values.into_iter().map(|(key,value)|T::from_json(value).map(|value|(key,value))).collect(),
+            _=>Err("expected an object map".into()) }
+    }
+}
+impl<T:ToJson> ToJson for BTreeMap<String,T> {
+    const HAS_REFERENCES: bool = T::HAS_REFERENCES;
+    fn shared_reference(&self,seen:&mut HashSet<(TypeId,usize)>)->bool {
+        T::HAS_REFERENCES && self.values().any(|value|value.shared_reference(seen))
+    }
+    fn to_json(&self,output:&mut String) {
+        output.push('{');for (i,(key,value)) in self.iter().enumerate() {
+            if i>0 { output.push(','); }quote_into(output,key);output.push(':');value.to_json(output);
+        }output.push('}');
+    }
+}
 
 impl FromJson for Option<Box<ListNode>> {
     fn from_json(value:Json)->Result<Self,String> {

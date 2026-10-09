@@ -655,6 +655,7 @@ local function run_python(problem_id, code, meta, cases, cb, oracle, answer_list
 
   util.write_file(dir .. "/user.py", code)
   util.write_file(dir .. "/ref.py", ref)
+  util.write_file(dir .. "/starter.py", meta.starterCode and meta.starterCode.python or "")
   util.write_file(dir .. "/harness.py", harness)
   util.write_file(dir .. "/cases.json", ops.encode(cases))
   util.write_file(dir .. "/types.json", declared_types(meta))
@@ -678,7 +679,9 @@ local function run_python_class(problem_id, code, meta, cases, cb, mode, oracle,
   end
 
   if mode == "class" then
-    local spec, spec_err = ops.python_spec(meta.starterCode and meta.starterCode.python)
+    local ok, names = pcall(vim.json.decode, cases[1]:match("^[^\n]+") or "")
+    local target = ok and type(names) == "table" and names[1] or nil
+    local spec, spec_err = ops.python_spec(meta.starterCode and meta.starterCode.python, target)
     if not spec then
       return fail(cb, spec_err, true)
     end
@@ -694,6 +697,7 @@ local function run_python_class(problem_id, code, meta, cases, cb, mode, oracle,
 
   util.write_file(dir .. "/user.py", code)
   util.write_file(dir .. "/ref.py", ref)
+  util.write_file(dir .. "/starter.py", meta.starterCode and meta.starterCode.python or "")
   util.write_file(dir .. "/harness.py", harness)
   util.write_file(dir .. "/cases.json", ops.encode(cases))
   util.write_file(dir .. "/types.json", declared_types(meta))
@@ -718,9 +722,11 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle, answer_l
 
   local main_src, gen_err
   if mode == "roundtrip" then
-    main_src, gen_err = cpp.generate_roundtrip(starter, oracle)
+    main_src, gen_err = cpp.generate_roundtrip(starter, oracle, code, ref)
   elseif mode == "class" then
-    local cls, cls_err = cpp.parse_class(starter)
+    local ok, names = pcall(vim.json.decode, cases[1]:match("^[^\n]+") or "")
+    local target = ok and type(names) == "table" and names[1] or nil
+    local cls, cls_err = cpp.parse_class(starter, code, ref, target)
     if not cls then
       return fail(cb, cls_err, true)
     end
@@ -729,9 +735,9 @@ local function run_cpp(problem_id, code, meta, cases, cb, mode, oracle, answer_l
       return fail(cb, enc_err, true)
     end
     util.write_file(dir .. "/ops.json", encoded)
-    main_src, gen_err = cpp.generate_class(starter, oracle)
+    main_src, gen_err = cpp.generate_class(starter, oracle, code, ref, cls.name)
   else
-    main_src, gen_err = cpp.generate(starter, oracle)
+    main_src, gen_err = cpp.generate(starter, oracle, code, ref)
   end
   if not main_src then
     return fail(cb, gen_err, true)
@@ -795,12 +801,14 @@ local function run_native(problem_id, code, lang, meta, cases, cb, mode, oracle,
     and (meta._oracle_code or (meta.solutions and meta.solutions[lang])) or nil
   local source, err
   if mode == "class" then
-    local cls, parse_err = generator.parse_class(starter)
+    local ok,names=pcall(vim.json.decode,cases[1]:match("^[^\n]+") or "")
+    local target=ok and type(names)=="table" and names[1] or nil
+    local cls, parse_err = generator.parse_class(starter, code, ref, target)
     if not cls then return fail(cb, parse_err, true) end
     local encoded, encode_err = ops.encode_cases(cases, generator.class_spec(cls))
     if not encoded then return fail(cb, encode_err, true) end
     util.write_file(dir .. "/ops.json", encoded)
-    source, err = generator.generate_class(starter, oracle, code, ref)
+    source, err = generator.generate_class(starter, oracle, code, ref, cls.name)
   elseif mode == "roundtrip" then
     source, err = generator.generate_roundtrip(starter, oracle, code, ref)
   else
@@ -812,7 +820,7 @@ local function run_native(problem_id, code, lang, meta, cases, cb, mode, oracle,
   util.write_file(dir .. "/cases.json", ops.encode(cases))
   if mode ~= "class" then
     local formats, arguments = require("meatcode.runner.formats"), {}
-    for i, case in ipairs(cases) do arguments[i] = formats.values(case) end
+    for i, case in ipairs(cases) do arguments[i] = formats.local_values(case) end
     util.write_file(dir .. "/arguments.json", ops.encode(arguments))
   end
   util.write_file(dir .. "/expected.json", expected_json(cases, answer_lists))

@@ -82,6 +82,48 @@ function M.values(block)
   return out
 end
 
+--- Native JSON decoders accept NeetCode's tuple rows as arrays. Only local
+--- harness input changes: quoted text and provider-bound payloads stay intact.
+function M.local_values(block)
+  local values = M.values(block)
+  for index, value in ipairs(values) do
+    local out, stack, quote, escaped, valid = {}, {}, nil, false, true
+    for i = 1, #value do
+      local c = value:sub(i, i)
+      if quote then
+        out[#out + 1] = c
+        if escaped then
+          escaped = false
+        elseif c == "\\" then
+          escaped = true
+        elseif c == quote then
+          quote = nil
+        end
+      elseif c == '"' or c == "'" then
+        quote = c
+        out[#out + 1] = c
+      elseif c == "(" or c == "[" or c == "{" then
+        stack[#stack+1] = c
+        out[#out+1] = c == "(" and "[" or c
+      elseif c == ")" or c == "]" or c == "}" then
+        local open = c == ")" and "(" or c == "]" and "[" or "{"
+        if stack[#stack] ~= open then valid=false;break end
+        stack[#stack] = nil
+        if c == ")" then
+          local last = #out
+          while last > 0 and out[last]:match("^%s$") do last=last-1 end
+          if out[last] == "," then out[last]="" end
+        end
+        out[#out+1] = c == ")" and "]" or c
+      else
+        out[#out+1] = c
+      end
+    end
+    values[index] = valid and #stack == 0 and not quote and table.concat(out) or value
+  end
+  return values
+end
+
 --- Whether a case is a design problem's operation sequence (either layout)
 --- rather than plain arguments, the same test `runner.run_selected` applies.
 function M.is_operations(block)

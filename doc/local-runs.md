@@ -48,9 +48,8 @@ It judges when:
 - no local oracle is selected yet (validation still running, or every candidate
   rejected);
 - the problem cannot run locally — languages without a local harness, SQL,
-  unsupported signatures or custom node types, arguments passed by reference
-  (`clone-graph`), or C++ `vector<Interval>`. Every case then runs on
-  the judge;
+  unsupported signatures or opaque/reference encodings that do not declare
+  their identity (`clone-graph` adjacency lists). Every case then runs on the judge;
 - the **cloud oracle** setting says so. `<leader>nc` has a row for it, cycled
   with `<CR>` and saved for every problem:
   - *complex problems without an openleetcode checker* (default) — problems
@@ -140,23 +139,46 @@ oracle judges (the results panel says validation is still in progress).
 
 ## What runs locally
 
-Python, C++, Swift and Rust function problems. Python, C++, Swift and Rust also
-support `class` ("design") operation suites; encode/decode round trips are
-supported by all four harnesses. The Swift harness accepts scalar
-values, arrays and optionals, `ListNode`/`TreeNode` values and node collections.
-The Rust harness uses only `rustc` and the standard library (no Cargo or
-downloads) and accepts scalar values, nested `Vec<T>`, `ListNode` and `TreeNode`
-options, design constructors/methods, and encode/decode round trips. Unsupported
-signatures are reported explicitly rather than silently coerced.
+Python, C++, Swift and Rust support function problems, in-place mutation,
+`class` ("design") operation suites, and encode/decode round trips. Rust uses
+only `rustc` and the standard library; no Cargo project or downloads.
 
-Additional detailed coverage in Python/C++ includes:
-- integers, floats, booleans, `char`, strings, and nested `vector`/`list` of
-  those
-- `ListNode` and `TreeNode`, array-encoded exactly as LeetCode does — including
-  `List[ListNode]` (merge-k-sorted-lists) and scalars that identify an existing
-  node inside another argument (`lowestCommonAncestor`'s `p` and `q`)
-- helper classes such as `Interval`, recovered from the docstring the reference
-  solution carries
+Custom helper records are recovered from starter comments/docstrings and actual
+starter, solution and reference declarations. Missing definitions and typed
+codecs are generated in scratch harnesses, never added to your solution file
+or submitted payload. Helper names are not special: `Point`, `Packet`, `Node`
+and `Interval` use their declared fields.
+
+Records accept positional arrays, NeetCode tuples (JSON `null`, `true` and
+`false` inside parentheses included), or named JSON objects. Named
+keys address stored fields; positional values follow constructor parameter order
+when it maps unambiguously to those fields, otherwise field declaration order.
+Returns serialize in that same positional order. Nested records, collections,
+string-key maps and optional/null fields use the same codecs. Declared defaults
+may fill omitted fields; missing required fields, surplus values and wrong
+shapes fail explicitly.
+
+Reference-capable records also accept explicit identity objects:
+
+```text
+root={"$id":"root","value":1,"next":{"$ref":"root"}}
+```
+
+`$id` is a nonempty string or integer; a reference contains only `$ref`.
+Definitions are indexed across all arguments and design operations in one case,
+so forward references, shared objects and representable cycles retain identity.
+Returns with explicit identity, sharing or cycles use named objects with
+canonical integer IDs starting at 1. IDs are isolated between cases and between
+user/reference executions. Duplicate IDs, unresolved/wrong-type references and
+identity tags on value structs fail explicitly. `$id` and `$ref` are reserved
+keys, including inside maps.
+
+Additional coverage includes:
+- integers, floats, booleans, characters, strings and nested collections
+- standard `ListNode` and `TreeNode`, array-encoded as LeetCode does, including
+  node collections and existing-node arguments (`lowestCommonAncestor`'s `p`/`q`)
+- `Interval` collections, including JSON arrays (`[[0,30],[5,10]]`) and
+  NeetCode tuples (`[(0,30),(5,10)]`), without modifying your solution
 - in-place problems that mutate their first argument and return nothing
 - 32-bit values passed as zero-padded binary strings (`reverse-bits`)
 - reference solutions whose parameter names differ from the test case keys —
@@ -177,13 +199,21 @@ Additional detailed coverage in Python/C++ includes:
 
 ## What doesn't
 
-SQL and arguments encoded **by reference** rather than by value remain cloud
-only: the adjacency list in `clone-graph` and random pointers in
-`copy-linked-list-with-random-pointer` cannot be faithfully rebuilt from the
-input. Swift/Rust custom node types, dictionaries and unsupported signatures
-remain unsupported; those cases are reported as unsupported rather than
-fabricating a result. C++ additionally cannot take `vector<Interval>`
-(`meeting-schedule`), which Python handles.
+SQL and opaque provider reference encodings remain cloud only. The adjacency
+list in `clone-graph` and random-pointer indices in
+`copy-linked-list-with-random-pointer` are not explicit `$id`/`$ref` schemas;
+the harness does not guess their edges.
+
+Custom records require accessible stored fields and a safe constructor mapping.
+C++ requires direct public data fields and unambiguous constructor assignments;
+in-class default field initializers are unsupported.
+Python constructors must map parameters one-to-one to stored attributes; slots
+are supported. Swift supports structs/classes, with mutable, safely initialized
+class fields required for cyclic identity shells. Rust supports named structs,
+`Box<T>` values and `Rc<RefCell<T>>` identity graphs; tuple/unit structs and
+borrowed-reference fields are unsupported. Unsupported field types, ambiguous
+constructors and unsafe cyclic layouts are reported rather than fabricated,
+and retain the existing cloud fallback.
 
 The historical NeetCode 150 counts below describe the earlier Python/C++
 coverage, not a measured Swift/Rust coverage figure.

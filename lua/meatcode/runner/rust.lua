@@ -1,18 +1,20 @@
 --- Native Rust harness generation using the bundled, dependency-free runtime.
 local M = {}
+local structure = require("meatcode.runner.rust_structures")
 local LIST, TREE = "Option<Box<ListNode>>", "Option<Rc<RefCell<TreeNode>>>"
 local scalars = { i8=true,i16=true,i32=true,i64=true,isize=true,u8=true,u16=true,u32=true,u64=true,usize=true,f32=true,f64=true,bool=true,char=true,String=true }
-local function clean(t)
-  return (t:gsub("%s+", ""):gsub("std::rc::Rc", "Rc"):gsub("std::cell::RefCell", "RefCell")
-    :gsub("std::vec::Vec", "Vec"):gsub("std::string::String", "String"))
+local function clean(t) return structure.canonical(t) end
+local function supported(t, records)
+  if scalars[t] or t == LIST or t == TREE or (records and records[t]) then return true end
+  local inner=t:match("^Vec<(.*)>$") or t:match("^Box<(.*)>$") or t:match("^Option<(.*)>$")
+  if inner then return supported(inner,records) end
+  inner=t:match("^BTreeMap<String,(.*)>$")
+  if inner then return supported(inner,records) end
+  inner=t:match("^Rc<RefCell<(.*)>>$")
+  return inner and records and records[inner]~=nil or false
 end
-local function supported(t)
-  if scalars[t] or t == LIST or t == TREE then return true end
-  local inner = t:match("^Vec<(.*)>$")
-  return inner ~= nil and supported(inner)
-end
-local function uncomment(text) return (text:gsub("/%*.-%*/", ""):gsub("//[^\n]*", "")) end
-local function parameters(text, unrestricted)
+local function uncomment(text) return structure.strip(text) end
+local function parameters(text, unrestricted, records)
   local out, start, depth = {}, 1, 0
   for i = 1, #text + 1 do
     local ch = text:sub(i,i)
@@ -31,7 +33,7 @@ local function parameters(text, unrestricted)
         elseif typ:sub(1,1) == "&" then borrow="ref"; typ=typ:sub(2) end
         if borrow and typ == "str" then typ="String" end
         if borrow and typ:match("^%[.*%]$") then typ="Vec<" .. typ:sub(2,-2) .. ">" end
-        if not unrestricted and not supported(typ) then return nil, "unsupported Rust parameter type `" .. typ .. "`" end
+        if not unrestricted and not supported(typ,records) then return nil, "unsupported Rust parameter type `" .. typ .. "`" end
         out[#out+1] = { name=name,type=typ,borrow=borrow,declared_type=declared_type }
       end
       start = i + 1
@@ -39,27 +41,33 @@ local function parameters(text, unrestricted)
   end
   return out
 end
-local function methods(text, unrestricted)
+local function methods(text, unrestricted, records)
   local out = {}
   for name, args, suffix in text:gmatch("fn%s+([%w_]+)%s*(%b())%s*([^{}]*){") do
-    local params, err = parameters(args:sub(2,-2), unrestricted)
+    local params, err = parameters(args:sub(2,-2), unrestricted, records)
     if not params then return nil, err end
     local ret = clean(suffix:match("%-%>%s*(.-)%s*$") or "()")
-    if not unrestricted and ret ~= "()" and ret ~= "Self" and not supported(ret) then return nil, "unsupported Rust result type `" .. ret .. "`" end
+    if not unrestricted and ret ~= "()" and ret ~= "Self" and not supported(ret,records) then return nil, "unsupported Rust result type `" .. ret .. "`" end
     out[#out+1] = { name=name,params=params,ret=ret }
   end
   return out
 end
-local function signature(starter, unrestricted)
+local function signature(starter, unrestricted, code, ref)
+  local records
+  if not unrestricted then
+    local schemas, schema_err = structure.discover(starter, code, ref)
+    if not schemas then return nil, schema_err end
+    records = schemas.records
+  end
   local src = uncomment(starter or "")
   local body = src:match("impl%s+Solution%s*{(.*)")
   if not body then return nil, "could not find impl Solution in the Rust starter" end
-  local parsed, err = methods(body, unrestricted)
+  local parsed, err = methods(body, unrestricted, records)
   if not parsed then return nil, err end
   if not parsed[1] then return nil, "could not parse a Rust Solution method" end
   return parsed[1]
 end
-function M.parse_signature(starter) return signature(starter, false) end
+function M.parse_signature(starter, code, ref) return signature(starter, false, code, ref) end
 
 --- Inspect declarations without confusing comments or literals with Rust code.
 local function has_solution_method(code, name)
@@ -141,15 +149,32 @@ function M.adapt_submission(code, starter, judge_starter)
   return code .. "\n\nimpl Solution {\n    pub fn " .. target.name .. params .. " " .. vim.trim(suffix)
     .. " {\n        Self::" .. source.name .. "(" .. table.concat(args, ", ") .. ")\n    }\n}\n"
 end
-function M.parse_class(starter)
-  local src = uncomment(starter or "")
-  local name = src:match("struct%s+([%w_]+)")
-  if not name then return nil, "could not find a Rust design struct" end
-  local body = src:match("impl%s+" .. name .. "%s*{(.*)")
-  if not body then return nil, "could not find impl " .. name .. " in the Rust starter" end
-  local parsed, err = methods(body)
+function M.parse_class(starter, code, ref, target)
+  local src=uncomment(starter or "")
+  local candidates={}
+  for candidate,implementation in src:gmatch("impl%s+([%w_]+)%s*(%b{})") do
+    candidates[#candidates+1]={candidate,implementation}
+  end
+  local name=target
+  if not name then
+    for _,pair in ipairs(candidates) do
+      if pair[1]=="Solution" then name=pair[1];break end
+      for method in pair[2]:gmatch("fn%s+([%w_]+)%s*%(") do
+        if method~="new" then name=pair[1];break end
+      end
+      if name then break end
+    end
+  end
+  name=name or (candidates[1] and candidates[1][1]) or src:match("struct%s+([%w_]+)")
+  if not name then return nil,"could not find a Rust design struct" end
+  local bodies={}
+  for _,pair in ipairs(candidates) do if pair[1]==name then bodies[#bodies+1]=pair[2] end end
+  if #bodies==0 then return nil,"could not find impl "..name.." in the Rust starter" end
+  local schemas,schema_err=structure.discover(starter,code,ref,name)
+  if not schemas then return nil,schema_err end
+  local parsed,err=methods(table.concat(bodies,"\n"),false,schemas.records)
   if not parsed then return nil, err end
-  local cls = { name=name,methods={},ctor={} }
+  local cls = { name=name,methods={},ctor={},records=schemas.records }
   for _, method in ipairs(parsed) do
     if method.name == "new" then cls.ctor=method.params;cls.has_ctor=true
     else cls.methods[#cls.methods+1]=method end
@@ -159,7 +184,11 @@ end
 function M.class_spec(cls)
   local function flags(params)
     local out={}
-    for _,param in ipairs(params) do out[#out+1]=param.type:match("^Vec<")~=nil or param.type==LIST or param.type==TREE end
+    for _,param in ipairs(params) do
+      local t=param.type
+      if t:sub(1,7)=="Option<" then t=t:sub(8,-2) end
+      out[#out+1]=not scalars[t]
+    end
     return out
   end
   local spec={name=cls.name,ctor=flags(cls.ctor),methods={}}
@@ -192,7 +221,7 @@ end
 local function class_body(cls)
   if not cls.has_ctor then return nil, "Rust design struct needs a new constructor" end
   local ctor,args=bind(cls.ctor,"args")
-  local lines={"let mut operations=array(input)?.into_iter();",'let first=operations.next().ok_or("missing constructor")?;',
+  local lines={"let mut input=input;initialize_graph(std::slice::from_mut(&mut input))?;","let mut operations=array(input)?.into_iter();",'let first=operations.next().ok_or("missing constructor")?;',
     "let mut fields=array(first)?.into_iter();",'let name=String::from_json(fields.next().ok_or("missing constructor name")?)?;',
     'if name!="' .. cls.name .. '" { return Err("first operation must be the constructor".into()); }',
     "let args=fields.collect::<Vec<_>>();",ctor,"let mut object=" .. cls.name .. "::new(" .. args .. ");",
@@ -203,7 +232,7 @@ local function class_body(cls)
     local declarations,arguments=bind(method.params,"args")
     local call="object." .. method.name .. "(" .. arguments .. ")"
     lines[#lines+1]='"' .. method.name .. '" => {' .. declarations .. (method.ret=="()" and call .. ';output.push_str("null");'
-      or "let result=" .. call .. ";result.to_json(&mut output);") .. "},"
+      or "let result=" .. call .. ";output.push_str(&encoded(&result));") .. "},"
   end
   lines[#lines+1]='_ => return Err(format!("unknown operation {}",name)),}\n}\noutput.push(\']\');Ok(output)'
   return table.concat(lines,"\n")
@@ -263,27 +292,40 @@ fn main() {
     }
 }
 ]=]
-local function generate(starter,oracle,code,ref,mode)
+local function generate(starter,oracle,code,ref,mode,target)
   local metadata,err
-  if mode=="function" then metadata,err=M.parse_signature(starter) else metadata,err=M.parse_class(starter) end
+  if mode=="function" then metadata,err=M.parse_signature(starter,code,ref) else metadata,err=M.parse_class(starter,code,ref,target) end
   if not metadata then return nil,err end
   local body
   if mode=="function" then body=function_body(metadata)
   elseif mode=="class" then body,err=class_body(metadata)
   else body,err=roundtrip_body(metadata) end
   if not body then return nil,err end
-  local function wrap(source,name)
+  local roots={}
+  local function add(method)
+    for _,param in ipairs(method.params or {}) do roots[#roots+1]=param.type end
+    if method.ret and method.ret~="()" then roots[#roots+1]=method.ret end
+  end
+  if mode=="function" then add(metadata) else
+    for _,param in ipairs(metadata.ctor) do roots[#roots+1]=param.type end
+    for _,method in ipairs(metadata.methods) do add(method) end
+  end
+  local shared={}
+  local function wrap(source,name,other)
     if type(source)~="string" or source=="" then return nil,"no Rust solution source supplied" end
+    local schemas,schema_err=structure.discover(starter,other,source,mode~="function" and metadata.name or "Solution",roots)
+    if not schemas then return nil,schema_err end
+    for inner,generated in pairs(schemas.shared_options) do shared[inner]=generated end
     local plain=uncomment(source)
     if plain:match("struct%s+ListNode") or plain:match("struct%s+TreeNode") then return nil,"custom Rust node definitions are unsupported; the harness supplies standard judge types" end
     if mode=="function" and not plain:match("struct%s+Solution") then source="struct Solution;\n" .. source end
-    return "mod " .. name .. " {\nuse super::*;\n" .. source .. "\npub(super) fn execute(input:Json)->Result<String,String> {\n" .. body .. "\n}\n}\n"
+    return "mod " .. name .. " {\nuse super::*;\n" .. structure.definitions(source,schemas.records) .. "\n" .. source .. "\n" .. schemas.codecs .. "\npub(super) fn execute(input:Json)->Result<String,String> {\n" .. body .. "\n}\n}\n"
   end
-  local user;user,err=wrap(code,"UserCode")
+  local user;user,err=wrap(code,"UserCode",ref)
   if not user then return nil,err end
   local reference=oracle=="reference"
   local oracle_source=""
-  if reference then oracle_source,err=wrap(ref,"OracleCode");if not oracle_source then return nil,err end end
+  if reference then oracle_source,err=wrap(ref,"OracleCode",code);if not oracle_source then return nil,err end end
   local this=debug.getinfo(1,"S").source:sub(2)
   local util = require("meatcode.util")
   local dir = vim.fs.dirname(this) .. "/harness/"
@@ -296,9 +338,12 @@ local function generate(starter,oracle,code,ref,mode)
         let (oracle,_) = capture(&dir,index,true,||OracleCode::execute(oracle_input));
         match oracle { Ok(value)=>expected=Some(value),Err(message)=>{status="oracle_error";error=Some(message);} }
     ]] or "")
-  return runtime .. "\n" .. types .. "\n" .. user .. oracle_source .. main
+  local shared_codecs={}
+  for _,generated in pairs(shared) do shared_codecs[#shared_codecs+1]=generated end
+  table.sort(shared_codecs)
+  return runtime .. "\n" .. types .. "\n" .. table.concat(shared_codecs,"\n") .. "\n" .. user .. oracle_source .. main
 end
 function M.generate(starter,oracle,code,ref) return generate(starter,oracle,code,ref,"function") end
-function M.generate_class(starter,oracle,code,ref) return generate(starter,oracle,code,ref,"class") end
+function M.generate_class(starter,oracle,code,ref,target) return generate(starter,oracle,code,ref,"class",target) end
 function M.generate_roundtrip(starter,oracle,code,ref) return generate(starter,oracle,code,ref,"roundtrip") end
 return M

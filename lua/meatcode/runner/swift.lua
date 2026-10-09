@@ -7,110 +7,18 @@ local scalar = {
   ListNode=true, TreeNode=true,
 }
 local function clean(t) return (t:gsub("%s+", "")) end
-local function supported(t)
+local function supported(t, known)
   t = clean(t):gsub("%?+$", "")
   local inner = t:match("^%[(.*)%]$")
-  return inner and supported(inner) or scalar[t] == true
-end
---- Replace comments (including nested block comments) and string literals
---- (standard, multiline, raw #) with spaces, preserving newlines and 1-to-1 byte positions.
-local function lexical_strip(src)
-  if type(src) ~= "string" then return "" end
-  local out = {}
-  local i = 1
-  local len = #src
-  while i <= len do
-    local ch = src:sub(i, i)
-    local next_ch = src:sub(i + 1, i + 1)
-
-    if ch == "/" and next_ch == "/" then
-      while i <= len and src:sub(i, i) ~= "\n" do
-        out[#out + 1] = " "
-        i = i + 1
-      end
-      if i <= len and src:sub(i, i) == "\n" then
-        out[#out + 1] = "\n"
-        i = i + 1
-      end
-    elseif ch == "/" and next_ch == "*" then
-      local depth = 1
-      out[#out + 1] = " "
-      out[#out + 1] = " "
-      i = i + 2
-      while i <= len and depth > 0 do
-        if src:sub(i, i + 1) == "/*" then
-          depth = depth + 1
-          out[#out + 1] = " "
-          out[#out + 1] = " "
-          i = i + 2
-        elseif src:sub(i, i + 1) == "*/" then
-          depth = depth - 1
-          out[#out + 1] = " "
-          out[#out + 1] = " "
-          i = i + 2
-        else
-          local c = src:sub(i, i)
-          out[#out + 1] = (c == "\n" and "\n" or " ")
-          i = i + 1
-        end
-      end
-    else
-      local hashes = src:match("^(#*)", i)
-      local hash_len = #hashes
-      local after_hashes = src:sub(i + hash_len, i + hash_len)
-      if after_hashes == '"' then
-        local is_multiline = src:sub(i + hash_len, i + hash_len + 2) == '"""'
-        local quote_len = is_multiline and 3 or 1
-        local close_delim = (is_multiline and '"""' or '"') .. hashes
-        local delim_len = hash_len + quote_len
-        for _ = 1, delim_len do
-          out[#out + 1] = " "
-        end
-        i = i + delim_len
-        while i <= len do
-          if hash_len == 0 and not is_multiline and src:sub(i, i) == "\n" then
-            out[#out + 1] = "\n"
-            i = i + 1
-            break
-          end
-          if src:sub(i, i) == "\\" then
-            local esc_hashes = src:match("^(#*)", i + 1)
-            if #esc_hashes == hash_len then
-              local esc_total = 1 + hash_len + 1
-              for _ = 1, math.min(esc_total, len - i + 1) do
-                local c = src:sub(i, i)
-                out[#out + 1] = (c == "\n" and "\n" or " ")
-                i = i + 1
-              end
-            else
-              local c = src:sub(i, i)
-              out[#out + 1] = (c == "\n" and "\n" or " ")
-              i = i + 1
-            end
-          elseif src:sub(i, i + #close_delim - 1) == close_delim then
-            for _ = 1, #close_delim do
-              out[#out + 1] = " "
-            end
-            i = i + #close_delim
-            break
-          else
-            local c = src:sub(i, i)
-            out[#out + 1] = (c == "\n" and "\n" or " ")
-            i = i + 1
-          end
-        end
-      else
-        out[#out + 1] = ch
-        i = i + 1
-      end
-    end
-  end
-  return table.concat(out)
+  local key, value = t:match("^%[([^:]+):(.+)%]$")
+  return (inner and supported(inner, known))
+    or (key == "String" and supported(value, known))
+    or scalar[t] == true or (known and known[t] == true)
 end
 local function uncomment(src)
-  return lexical_strip(src)
+  return require("meatcode.runner.swift_structures").strip(src)
 end
-local function params(text, unrestricted)
+local function params(text, unrestricted, known)
   local out, start, depth = {}, 1, 0
   for i = 1, #text + 1 do
     local c = text:sub(i, i)
@@ -124,7 +32,7 @@ local function params(text, unrestricted)
         if not typ then return nil, "cannot parse Swift parameter `" .. part .. "`" end
         local inout = typ:match("^inout%s+") ~= nil
         typ = clean(typ:gsub("^inout%s+", ""):gsub("%s*=.*$", ""))
-        if not unrestricted and not supported(typ) then return nil, "unsupported Swift parameter type `" .. typ .. "`" end
+        if not unrestricted and not supported(typ, known) then return nil, "unsupported Swift parameter type `" .. typ .. "`" end
         out[#out + 1] = { external=external == "_" and "" or external, name=name, type=typ, inout=inout }
       end
       start = i + 1
@@ -132,13 +40,13 @@ local function params(text, unrestricted)
   end
   return out
 end
-local function methods(src, unrestricted)
+local function methods(src, unrestricted, known)
   local out = {}
   for name, arguments, suffix in src:gmatch("func%s+([%w_]+)%s*%((.-)%)([^{}]*){") do
-    local args, err = params(arguments, unrestricted)
+    local args, err = params(arguments, unrestricted, known)
     if not args then return nil, err end
     local ret = clean(suffix:match("%-%>%s*(.-)%s*$") or "Void")
-    if ret ~= "Void" and ret ~= "()" and not unrestricted and not supported(ret) then return nil, "unsupported Swift result type `" .. ret .. "`" end
+    if ret ~= "Void" and ret ~= "()" and not unrestricted and not supported(ret, known) then return nil, "unsupported Swift result type `" .. ret .. "`" end
     if ret == "()" then ret = "Void" end
     out[#out + 1] = { name=name, params=args, ret=ret }
   end
@@ -261,7 +169,7 @@ local function scan_block_methods(stripped, block)
   return out
 end
 local function extract_solution_methods(code, unrestricted)
-  local stripped = lexical_strip(code or "")
+  local stripped = uncomment(code or "")
   local blocks = find_solution_blocks(stripped)
   local all_methods = {}
   for _, block in ipairs(blocks) do
@@ -310,11 +218,11 @@ local function has_solution_method(code, name, expected_params)
   end
   return false
 end
-local function parse_starter_signature(starter, unrestricted)
+local function parse_starter_signature(starter, unrestricted, known)
   if type(starter) ~= "string" or starter == "" then
     return nil, "no Swift starter code to derive a signature from"
   end
-  local stripped = lexical_strip(starter)
+  local stripped = uncomment(starter)
   local blocks = find_solution_blocks(stripped)
   if #blocks == 0 then
     return nil, "Swift starter must define class or struct Solution"
@@ -337,12 +245,12 @@ local function parse_starter_signature(starter, unrestricted)
     return nil, "unsupported static Swift method signature"
   end
   local p_text = m.raw_params and m.raw_params:sub(2, -2) or ""
-  local parsed_params, err = params(p_text, unrestricted)
+  local parsed_params, err = params(p_text, unrestricted, known)
   if not parsed_params then return nil, err end
 
   local ret = clean(m.raw_suffix:match("%-%>%s*(.-)%s*$") or "Void")
   if ret == "()" then ret = "Void" end
-  if not unrestricted and ret ~= "Void" and not supported(ret) then
+  if not unrestricted and ret ~= "Void" and not supported(ret, known) then
     return nil, "unsupported Swift result type `" .. ret .. "`"
   end
 
@@ -357,8 +265,14 @@ local function parse_starter_signature(starter, unrestricted)
     raw_suffix = m.raw_suffix,
   }
 end
-function M.parse_signature(starter)
-  return parse_starter_signature(starter, false)
+function M.parse_signature(starter, code, ref)
+  local structures = require("meatcode.runner.swift_structures")
+  local known = structures.types(starter or "")
+  for name in pairs(structures.types(code or "")) do known[name] = true end
+  for name in pairs(structures.types(ref or "")) do known[name] = true end
+  local documented = structures.documented_helpers(starter or "", code or "")
+  for name in pairs(structures.types(documented)) do known[name] = true end
+  return parse_starter_signature(starter, false, known)
 end
 --- Bridge compatible provider entry points in the payload, never the buffer.
 --- Appends an extension Solution that forwards calls to the original implementation.
@@ -408,7 +322,7 @@ function M.adapt_submission(code, starter, judge_starter)
   end
 
   local solution_kind = "class"
-  local stripped_code = lexical_strip(code)
+  local stripped_code = uncomment(code)
   local code_blocks = find_solution_blocks(stripped_code)
   local found_decl = false
   for _, b in ipairs(code_blocks) do
@@ -468,59 +382,84 @@ function M.adapt_submission(code, starter, judge_starter)
 
   return code .. extension
 end
-function M.parse_class(starter)
+function M.parse_class(starter, code, ref, target)
   local src = uncomment(starter or "")
-  local name = src:match("class%s+([%w_]+)") or src:match("struct%s+([%w_]+)")
+  local structures = require("meatcode.runner.swift_structures")
+  local known = structures.types(starter or "")
+  for name in pairs(structures.types(code or "")) do known[name] = true end
+  for name in pairs(structures.types(ref or "")) do known[name] = true end
+  for name in pairs(structures.types(structures.documented_helpers(starter or "", code or ""))) do known[name] = true end
+  local name = target or src:match("class%s+(Solution)%f[%W]") or src:match("struct%s+(Solution)%f[%W]")
+    or src:match("class%s+([%w_]+)") or src:match("struct%s+([%w_]+)")
   if not name then return nil, "could not find a Swift class or struct" end
-  local ctor, err = params(src:match("init%s*%((.-)%)") or "")
+  local start = src:find("[%w_]+%s+" .. name .. "%f[%W]")
+  local open = start and src:find("{", start, true)
+  if not open then return nil, "unsupported Swift class declaration for " .. name end
+  local depth, close = 1, open + 1
+  while close <= #src and depth > 0 do
+    local c = src:sub(close, close)
+    if c == "{" then depth = depth + 1 elseif c == "}" then depth = depth - 1 end
+    close = close + 1
+  end
+  if depth ~= 0 then return nil, "unterminated Swift class declaration for " .. name end
+  local block = src:sub(start, close - 1)
+  local ctor, err = params(block:match("init%s*%((.-)%)") or "", false, known)
   if not ctor then return nil, err end
-  local parsed; parsed, err = methods(src)
+  local parsed; parsed, err = methods(block, false, known)
   if not parsed then return nil, err end
-  return { name=name, kind=src:match("class%s+" .. name) and "class" or "struct", ctor=ctor, methods=parsed }
+  return { name=name, kind=block:match("class%s+" .. name) and "class" or "struct", ctor=ctor, methods=parsed }
 end
 function M.class_spec(cls)
   local function flags(list)
     local out = {}
-    for _, p in ipairs(list) do out[#out + 1] = p.type:sub(1,1) == "[" or p.type:find("Node",1,true) ~= nil end
+    for _, p in ipairs(list) do
+      local base = p.type:gsub("%?+$", "")
+      out[#out + 1] = p.type:sub(1,1) == "[" or p.type:find("Node",1,true) ~= nil
+        or not scalar[base]
+    end
     return out
   end
   local spec = { name=cls.name, ctor=flags(cls.ctor), methods={} }
   for _, method in ipairs(cls.methods) do spec.methods[method.name] = flags(method.params) end
   return spec
 end
-local function bind(list, input)
+local function bind(list, input, module)
   local declarations, arguments = {}, {}
   declarations[#declarations + 1] = string.format('guard %s.count == %d else { throw mcError("wrong argument count") }', input, #list)
   for i, p in ipairs(list) do
     local name = "_arg" .. i
-    local first = list[1] and list[1].type:gsub("%?$", "")
-    local node = p.type:gsub("%?$", "")
+    local typ = p.type
+    local first = list[1] and list[1].type:gsub("%?+$", "")
+    local node = typ:gsub("%?+$", "")
+    local qualified = typ:gsub("[%a_][%w_]*", function(name)
+      return scalar[name] and name or module .. "." .. name
+    end)
     local decoder = i > 1 and node == first and (node == "TreeNode" or node == "ListNode")
-      and string.format("mcNodeReference(%s[%d], %s.self, _arg1)", input, i-1, p.type)
-      or string.format("mcDecode(%s[%d], %s.self)", input, i-1, p.type)
+      and string.format("mcNodeReference(%s[%d], %s.self, _arg1)", input, i-1, qualified)
+      or string.format("mcDecode(%s[%d], %s.self)", input, i-1, qualified)
     declarations[#declarations + 1] = string.format("%s %s = try %s", p.inout and "var" or "let", name, decoder)
     arguments[#arguments + 1] = (p.external ~= "" and p.external .. ": " or "") .. (p.inout and "&" or "") .. name
   end
   return table.concat(declarations, "\n"), table.concat(arguments, ", ")
 end
 local function function_body(sig, module, roundtrip)
-  local declarations, arguments = bind(sig.params, "args")
+  local declarations, arguments = bind(sig.params, "args", module)
   local call = "object." .. sig.name .. "(" .. arguments .. ")"
   if roundtrip then call = "object.decode(" .. (roundtrip.external ~= "" and roundtrip.external .. ": " or "") .. call .. ")" end
   local invoke
   if sig.ret == "Void" and not roundtrip then
-    invoke = call .. "\nreturn " .. (#sig.params > 0 and "try _arg1.toJSON()" or "NSNull()")
+    invoke = call .. "\nreturn " .. (#sig.params > 0 and "try mcEncoded(_arg1)" or "NSNull()")
   else
-    invoke = "return try " .. call .. ".toJSON()"
+    invoke = "return try mcEncoded(" .. call .. ")"
   end
-  return declarations .. "\n" .. (sig.kind == "struct" and "var" or "let")
+  return "try mcBegin(args)\n" .. declarations .. "\n" .. (sig.kind == "struct" and "var" or "let")
     .. " object = " .. module .. "." .. (sig.class or "Solution") .. "()\n" .. invoke
 end
 local function class_body(cls, module)
-  local declarations, arguments = bind(cls.ctor, "ctorArgs")
+  local declarations, arguments = bind(cls.ctor, "ctorArgs", module)
   local lines = {
     'guard let ctor = operations.first, let name = ctor.first as? String, name == "' .. cls.name .. '" else { throw mcError("missing constructor") }',
-    "let ctorArgs = Array(ctor.dropFirst())", declarations,
+    "let ctorArgs = Array(ctor.dropFirst())", "try mcBegin(operations)", declarations,
     (cls.kind == "struct" and "var" or "let") .. " object = " .. module .. "." .. cls.name .. "(" .. arguments .. ")",
     "var outputs: [Any] = [NSNull()]",
     "for operation in operations.dropFirst() {",
@@ -528,12 +467,12 @@ local function class_body(cls, module)
     "let args = Array(operation.dropFirst())", "switch name {",
   }
   for _, method in ipairs(cls.methods) do
-    local binding, args = bind(method.params, "args")
+    local binding, args = bind(method.params, "args", module)
     lines[#lines + 1] = 'case "' .. method.name .. '":'
     lines[#lines + 1] = binding
     local call = "object." .. method.name .. "(" .. args .. ")"
     lines[#lines + 1] = method.ret == "Void" and call .. "\noutputs.append(NSNull())"
-      or "outputs.append(try " .. call .. ".toJSON())"
+      or "outputs.append(try mcEncoded(" .. call .. "))"
   end
   lines[#lines + 1] = 'default: throw mcError("unknown operation: " + name)'
   lines[#lines + 1] = "}\n}\nreturn outputs"
@@ -568,19 +507,40 @@ do {
     print(try! mcText(["ok": false, "error": error.localizedDescription, "cases": []]))
 }
 ]=]
-local function source(code, ref, oracle, signature, body, design)
+local function source(code, ref, oracle, signature, body, design, starter)
   local imports = {}
-  local function wrap(text, name)
+  local structures = require("meatcode.runner.swift_structures")
+  local target = design and signature.name or signature.class or "Solution"
+  local roots={}
+  local function add(method)
+    for _,param in ipairs(method.params or {}) do roots[#roots+1]=param.type end
+    if method.ret and method.ret~="Void" and method.ret~="()" then roots[#roots+1]=method.ret end
+  end
+  if design then
+    for _,param in ipairs(signature.ctor or {}) do roots[#roots+1]=param.type end
+    for _,method in ipairs(signature.methods) do add(method) end
+  else add(signature) end
+  local function wrap(text, name, documented)
     local lines = {}
+    local helpers = structures.documented_helpers((starter or "") .. "\n" .. (code or "") .. "\n" .. (ref or ""), text, target)
+    if documented and helpers ~= "" then lines[#lines+1] = helpers end
     for line in (text .. "\n"):gmatch("([^\n]*)\n") do
       if line:match("^%s*import%s+[%w_.]+%s*$") then imports[line] = true else lines[#lines+1] = line end
     end
-    return "enum " .. name .. " {\n" .. table.concat(lines,"\n") .. "\n}\n"
+    return "enum " .. name .. " {\n" .. table.concat(lines,"\n") .. "\n}\n", helpers
   end
-  local user = wrap(code or "", "UserCode")
+  local user, user_helpers = wrap(code or "", "UserCode", true)
   local reference = oracle == "reference"
   if reference and not ref then return nil, "no Swift reference source" end
-  local oracle_code = reference and wrap(ref,"OracleCode") or ""
+  local oracle_code, oracle_helpers = "", ""
+  if reference then oracle_code, oracle_helpers = wrap(ref, "OracleCode", true) end
+  local user_extensions, _, structure_error = structures.extensions(user_helpers .. "\n" .. (code or ""), "UserCode", target, roots)
+  if not user_extensions then return nil, structure_error end
+  local oracle_extensions = ""
+  if reference then
+    oracle_extensions, _, structure_error = structures.extensions(oracle_helpers .. "\n" .. (ref or ""), "OracleCode", target, roots)
+    if not oracle_extensions then return nil, structure_error end
+  end
   local this = debug.getinfo(1,"S").source:sub(2)
   local runtime = require("meatcode.util").read_file(vim.fs.dirname(this) .. "/harness/swift_runtime.swift")
   if not runtime then return nil, "missing Swift runtime -- reinstall meatcode.nvim" end
@@ -596,20 +556,20 @@ local function source(code, ref, oracle, signature, body, design)
     :gsub("__ORACLE__", reference and "let (expected, _) = try mcCapture(dir) { try mcText(executeOracle(input)) }" or "")
     :gsub("__EXPECTED__", reference and 'row["expected"] = expected' or "")
   local extra = vim.tbl_keys(imports); table.sort(extra)
-  return runtime .. "\n" .. table.concat(extra,"\n") .. "\n" .. user .. oracle_code .. helpers .. main
+  return runtime .. "\n" .. table.concat(extra,"\n") .. "\n" .. user .. user_extensions .. "\n" .. oracle_code .. oracle_extensions .. helpers .. main
 end
 function M.generate(starter, oracle, code, ref)
-  local sig, err = M.parse_signature(starter)
+  local sig, err = M.parse_signature(starter, code, ref)
   if not sig then return nil, err end
-  return source(code,ref,oracle,sig,function_body,false)
+  return source(code,ref,oracle,sig,function_body,false,starter)
 end
-function M.generate_class(starter, oracle, code, ref)
-  local cls, err = M.parse_class(starter)
+function M.generate_class(starter, oracle, code, ref, target)
+  local cls, err = M.parse_class(starter, code, ref, target)
   if not cls then return nil, err end
-  return source(code,ref,oracle,cls,class_body,true)
+  return source(code,ref,oracle,cls,class_body,true,starter)
 end
 function M.generate_roundtrip(starter, oracle, code, ref)
-  local cls, err = M.parse_class(starter)
+  local cls, err = M.parse_class(starter, code, ref)
   if not cls then return nil, err end
   local encode, decode
   for _, method in ipairs(cls.methods) do
@@ -621,6 +581,6 @@ function M.generate_roundtrip(starter, oracle, code, ref)
   return source(code,ref,oracle,encode,function(sig,module)
     local body = function_body(sig,module,decode.params[1])
     return body:gsub("object.decode%(", "object." .. decode.name .. "(")
-  end,false)
+  end,false,starter)
 end
 return M

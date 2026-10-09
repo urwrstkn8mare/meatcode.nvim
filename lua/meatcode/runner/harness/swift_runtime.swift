@@ -6,11 +6,93 @@ import Glibc
 #endif
 
 protocol MCJSON {
+    static var mcHasReferences: Bool { get }
     static func fromJSON(_ value: Any) throws -> Self
     func toJSON() throws -> Any
+    func mcProbe(_ visited: inout Set<ObjectIdentifier>) -> Bool
+}
+extension MCJSON {
+    static var mcHasReferences: Bool { false }
+    func mcProbe(_ visited: inout Set<ObjectIdentifier>) -> Bool { false }
+}
+func mcEncoded<T: MCJSON>(_ value: T) throws -> Any {
+    if T.mcHasReferences && !mcContext.graph {
+        var visited = Set<ObjectIdentifier>()
+        mcContext.graph = value.mcProbe(&visited)
+    }
+    return try value.toJSON()
 }
 func mcError(_ text: String) -> NSError {
     NSError(domain: "meatcode", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+}
+
+private func mcIdentity(_ value: Any?) throws -> String {
+    guard let value = value else { throw mcError("missing identity id") }
+    if let text = value as? String, !text.isEmpty { return "s:" + text }
+    if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+       number.objCType.pointee != 100, number.objCType.pointee != 102,
+       number.doubleValue.isFinite, number.doubleValue.rounded() == number.doubleValue {
+        return "i:" + number.stringValue
+    }
+    throw mcError("identity id must be a nonempty string or integer")
+}
+final class MCDecodeContext {
+    var definitions: [String: [String: Any]] = [:]
+    var instances: [String: AnyObject] = [:]
+    var outputIDs: [ObjectIdentifier: (Int, AnyObject)] = [:]
+    var nextOutputID = 1
+    var graph = false
+    func index(_ value: Any) throws {
+        if let list = value as? [Any] { for item in list { try index(item) }; return }
+        guard let object = value as? [String: Any] else { return }
+        if let reference = object["$ref"] {
+            guard object.count == 1 else { throw mcError("reference object must contain only $ref") }
+            _ = try mcIdentity(reference)
+        }
+        if object["$id"] != nil {
+            let id = try mcIdentity(object["$id"])
+            guard definitions[id] == nil else { throw mcError("duplicate identity id") }
+            definitions[id] = object
+            graph = true
+        }
+        for item in object.values { try index(item) }
+    }
+}
+private var mcContext = MCDecodeContext()
+func mcBegin(_ values: [Any]) throws {
+    mcContext = MCDecodeContext()
+    try mcContext.index(values)
+}
+func mcReference<T: AnyObject>(_ value: Any, _ type: T.Type,
+    allocate: () throws -> T, populate: (T, [String: Any]) throws -> Void) throws -> AnyObject {
+    guard let object = value as? [String: Any] else { throw mcError("expected an identity object") }
+    let isRef = object["$ref"] != nil
+    let id = try mcIdentity(object[isRef ? "$ref" : "$id"])
+    if isRef && object.count != 1 { throw mcError("reference object must contain only $ref") }
+    guard let definition = mcContext.definitions[id] else { throw mcError("unresolved identity reference") }
+    if let instance = mcContext.instances[id] {
+        guard let typed = instance as? T else { throw mcError("identity reference has the wrong type") }
+        return typed
+    }
+    let shell = try allocate()
+    mcContext.instances[id] = shell
+    var fields = definition
+    fields.removeValue(forKey: "$id")
+    try populate(shell, fields)
+    guard let typed = shell as? T else { throw mcError("identity reference has the wrong type") }
+    return typed
+}
+func mcEncodeReference<T: AnyObject>(_ value: T, fields: () throws -> [String: Any],
+    positional: () throws -> [Any]) rethrows -> Any {
+    if !mcContext.graph { return try positional() }
+    let identity = ObjectIdentifier(value)
+    if let (id, _) = mcContext.outputIDs[identity] { return ["$ref": id] }
+    let id = mcContext.nextOutputID
+    mcContext.nextOutputID += 1
+    mcContext.outputIDs[identity] = (id, value)
+    var object: [String: Any] = ["$id": id]
+    object.merge(try fields(), uniquingKeysWith: { _, new in new })
+    return object
 }
 extension MCJSON where Self: Codable {
     static func fromJSON(_ value: Any) throws -> Self {
@@ -42,13 +124,42 @@ extension Character: MCJSON {
     func toJSON() -> Any { String(self) }
 }
 extension Array: MCJSON where Element: MCJSON {
+    static var mcHasReferences: Bool { Element.mcHasReferences }
     static func fromJSON(_ value: Any) throws -> [Element] {
         guard let values = value as? [Any] else { throw mcError("expected an array") }
         return try values.map { try Element.fromJSON($0) }
     }
     func toJSON() throws -> Any { try map { try $0.toJSON() } }
+    func mcProbe(_ visited: inout Set<ObjectIdentifier>) -> Bool {
+        guard Element.mcHasReferences else { return false }
+        var shared = false
+        for value in self { if value.mcProbe(&visited) { shared = true } }
+        return shared
+    }
+}
+
+extension Dictionary: MCJSON where Key == String, Value: MCJSON {
+    static var mcHasReferences: Bool { Value.mcHasReferences }
+    static func fromJSON(_ value: Any) throws -> [String: Value] {
+        guard let object = value as? [String: Any] else { throw mcError("expected a string-keyed object") }
+        var result: [String: Value] = [:]
+        for (key, item) in object { result[key] = try Value.fromJSON(item) }
+        return result
+    }
+    func toJSON() throws -> Any {
+        var result: [String: Any] = [:]
+        for key in keys.sorted() { result[key] = try self[key]!.toJSON() }
+        return result
+    }
+    func mcProbe(_ visited: inout Set<ObjectIdentifier>) -> Bool {
+        guard Value.mcHasReferences else { return false }
+        var shared = false
+        for key in keys.sorted() { if self[key]!.mcProbe(&visited) { shared = true } }
+        return shared
+    }
 }
 extension Optional: MCJSON where Wrapped: MCJSON {
+    static var mcHasReferences: Bool { Wrapped.mcHasReferences }
     static func fromJSON(_ value: Any) throws -> Wrapped? {
         if value is NSNull { return nil }
         if (Wrapped.self == ListNode.self || Wrapped.self == TreeNode.self), let array = value as? [Any], array.isEmpty { return nil }
@@ -57,6 +168,10 @@ extension Optional: MCJSON where Wrapped: MCJSON {
     func toJSON() throws -> Any {
         if let value = self { return try value.toJSON() }
         return (Wrapped.self == ListNode.self || Wrapped.self == TreeNode.self) ? [Any]() : NSNull()
+    }
+    func mcProbe(_ visited: inout Set<ObjectIdentifier>) -> Bool {
+        if let value = self { return value.mcProbe(&visited) }
+        return false
     }
 }
 final class ListNode: MCJSON {

@@ -152,6 +152,11 @@ the actual Neovim UI buffers and commands:
 
 ```sh
 nvim --headless -u NONE -l tests/local_runs.lua
+nvim --headless -u NONE -l tests/cpp_intervals.lua
+nvim --headless -u NONE -l tests/cpp_structures.lua
+nvim --headless -u NONE -l tests/python_structures.lua
+nvim --headless -u NONE -l tests/rust_structures.lua
+nvim --headless -u NONE -l tests/swift_structures.lua
 nvim --headless -u NONE -l tests/ui_state.lua
 MEATCODE_NO_SETUP=1 nvim --headless -u NONE -l tests/ui_state.lua
 MEATCODE_RUST_ANALYZER=/path/to/rust-analyzer nvim --headless -u NONE -l tests/rust_editor.lua
@@ -160,8 +165,17 @@ nvim --headless -u NONE -l tests/swift_submission.lua
 nvim --headless -u NONE -l tests/submission_languages.lua
 ```
 
-The runner check needs Python, Swift, Rust, and a supported sandbox. UI checks
-fixture provider responses; they do not log into real accounts. To also
+The runner check needs Python, Swift, Rust, and a supported sandbox.
+
+The C++ interval check needs a C++23 compiler and a supported sandbox. If macOS
+tool shims fail inside the sandbox, select the compiler and SDK explicitly:
+
+```sh
+MEATCODE_CPP_COMPILER="$(xcrun --find clang++)" SDKROOT="$(xcrun --show-sdk-path)" \
+  nvim --headless -u NONE -l tests/cpp_intervals.lua
+```
+
+UI checks fixture provider responses; they do not log into real accounts. To also
 exercise the Telescope catalogue, set `MEATCODE_PICKER=1`,
 `MEATCODE_TELESCOPE` to your telescope.nvim checkout, and `MEATCODE_PLENARY`
 to your plenary.nvim checkout when running `tests/ui_state.lua`.
