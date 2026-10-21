@@ -85,6 +85,8 @@ local function run()
   local rust_codec='struct Codec {} impl Codec { fn new() -> Self { Self {} } fn encode(&self, strs: Vec<String>) -> String { strs.join("|") } fn decode(&self, s: String) -> Vec<String> { if s.is_empty() { vec![] } else { s.split("|").map(str::to_string).collect() } } }'
   await_run('swift-roundtrip','swift',swift_codec,swift_codec,{'strs=["hello","world"]','strs=[]'},{'["hello","world"]','[]'},'class')
   await_run('rust-roundtrip','rust',rust_codec,rust_codec,{'strs=["hello","world"]','strs=[]'},{'["hello","world"]','[]'},'class')
+  local rust_solution_codec='impl Solution { pub fn encode(strs: Vec<String>) -> String { strs.join("|") } pub fn decode(s: String) -> Vec<String> { if s.is_empty() { vec![] } else { s.split("|").map(str::to_string).collect() } } }'
+  await_run('rust-solution-roundtrip','rust',rust_solution_codec,rust_solution_codec,{'strs=["hello","world"]','strs=[]'},{'["hello","world"]','[]'},'class')
   for _, lang in ipairs(vim.env.MEATCODE_SMOKE_LANG and {vim.env.MEATCODE_SMOKE_LANG} or {'swift','rust'}) do
     local code=lang=='swift' and 'class Solution { func sum(_ nums: [Int]) -> Int { nums.reduce(0,+) } }'
       or 'impl Solution { pub fn sum(nums: Vec<i32>) -> i32 { nums.iter().sum() } }'

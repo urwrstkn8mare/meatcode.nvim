@@ -47,7 +47,9 @@ local function methods(text, records)
     if not params then return nil, err end
     local ret = clean(suffix:match("%-%>%s*(.-)%s*$") or "()")
     if ret ~= "()" and ret ~= "Self" and not supported(ret,records) then return nil, "unsupported Rust result type `" .. ret .. "`" end
-    out[#out+1] = { name=name,params=params,ret=ret }
+    local receiver = vim.trim(args:sub(2,-2):match("^[^,]*"))
+    receiver = receiver == "&self" or receiver == "&mut self" or receiver == "self" or receiver == "mut self"
+    out[#out+1] = { name=name,params=params,ret=ret,receiver=receiver }
   end
   return out
 end
@@ -161,9 +163,12 @@ local function roundtrip_body(cls)
   local declarations,args=bind(encode.params,"args")
   local constructor=cls.name .. (cls.has_ctor and "::new()" or "{}")
   local encoded_arg=(decode.params[1].borrow=="mut" and "&mut " or decode.params[1].borrow=="ref" and "&" or "") .. "value"
-  return "let args=arguments(input)?;\n" .. declarations .. "\nlet mut object=" .. constructor .. ";\nlet "
-    .. (decode.params[1].borrow=="mut" and "mut " or "") .. "value=object." .. encode.name .. "(" .. args .. ");\n"
-    .. "let result=object." .. decode.name .. "(" .. encoded_arg .. ");\nOk(encoded(&result))"
+  -- NeetCode's Rust codecs are associated fns on `Solution`; only build an object when a method takes self.
+  local function call(method,arguments) return (method.receiver and "object." or cls.name .. "::") .. method.name .. "(" .. arguments .. ")" end
+  local object=(encode.receiver or decode.receiver) and "\nlet mut object=" .. constructor .. ";" or ""
+  return "let args=arguments(input)?;\n" .. declarations .. object .. "\nlet "
+    .. (decode.params[1].borrow=="mut" and "mut " or "") .. "value=" .. call(encode,args) .. ";\n"
+    .. "let result=" .. call(decode,encoded_arg) .. ";\nOk(encoded(&result))"
 end
 local MAIN=[=[
 fn run() -> Result<String,String> {
@@ -231,7 +236,8 @@ local function generate(starter,oracle,code,ref,mode,target)
     for inner,generated in pairs(schemas.shared_options) do shared[inner]=generated end
     local plain=uncomment(source)
     if plain:match("struct%s+ListNode") or plain:match("struct%s+TreeNode") then return nil,"custom Rust node definitions are unsupported; the harness supplies standard judge types" end
-    if mode=="function" and not plain:match("struct%s+Solution") then source="struct Solution;\n" .. source end
+    local owner=mode=="function" and "Solution" or metadata.name
+    if mode~="class" and not plain:match("struct%s+" .. owner .. "%f[^%w_]") then source="struct " .. owner .. ";\n" .. source end
     return "mod " .. name .. " {\nuse super::*;\n" .. structure.definitions(source,schemas.records) .. "\n" .. source .. "\n" .. schemas.codecs .. "\npub(super) fn execute(input:Json)->Result<String,String> {\n" .. body .. "\n}\n}\n"
   end
   local user;user,err=wrap(code,"UserCode",ref)
