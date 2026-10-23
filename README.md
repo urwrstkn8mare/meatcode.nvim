@@ -31,8 +31,10 @@ a merged catalog, solve/test locally, submit to any of the three.
   on long-running steps (opening a problem, checking other providers for a
   stronger oracle) and status updates that replace in place instead of
   stacking a toast per step. Detected automatically if installed — nothing to
-  configure on meatcode's side. Without it (or with any other notifier),
-  everything still works through plain `vim.notify`.
+  configure on meatcode's side. Without it, snacks.nvim's notifier,
+  noice.nvim and nvim-notify replace those updates in place too, just without
+  the spinner; any other notifier gets one plain `vim.notify` per step, and
+  everything still works.
 
 Python, C++, Swift and Rust are the supported solution languages. Unsupported
 problem signatures use the judge's test run. Rust needs no Cargo project
@@ -159,6 +161,7 @@ nvim --headless -u NONE -l tests/rust_structures.lua
 nvim --headless -u NONE -l tests/swift_structures.lua
 nvim --headless -u NONE -l tests/ui_state.lua
 MEATCODE_NO_SETUP=1 nvim --headless -u NONE -l tests/ui_state.lua
+nvim --headless -u NONE -l tests/notify.lua
 MEATCODE_RUST_ANALYZER=/path/to/rust-analyzer nvim --headless -u NONE -l tests/rust_editor.lua
 ```
 
@@ -188,8 +191,6 @@ completion, compiler diagnostics, clean solution files and isolated helper types
 - Notes per problem, kept beside the solution file
 - A solved/attempted filter in the finder, driven by the shared history
 - Add a configurable minimum number of completions to count as completed (i.e. be highlighted green by this plugin)
-- Support for other notifier plugins (nvim-notify, snacks, noice) beyond
-  fidget.nvim's optional integration ([more](README.md#requirements))
 
 ## Notes and thanks
 

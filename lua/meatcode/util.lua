@@ -27,11 +27,43 @@ local function resolve_fidget_progress()
   return fidget_progress
 end
 
+--- Last handle `vim.notify` returned per key, passed back as `replace`.
+local keyed = {}
+
+--- Sends a keyed update through whichever notifier owns `vim.notify`, with
+--- both replace-in-place hints since each plugin reads its own: snacks.nvim
+--- reuses the notification with the same `id`, nvim-notify replaces the
+--- handle given as `replace`, and noice forwards both to whichever of the two
+--- renders for it. Notifiers that support neither ignore them and stack.
+local function notify_keyed(msg, level, key)
+  -- noice defers fast-event calls and returns nothing, which would read as a
+  -- failed replace below; defer here instead so handles stay in order
+  if vim.in_fast_event() then
+    return vim.schedule(function() notify_keyed(msg, level, key) end)
+  end
+  local opts = { title = "MeatCode", id = key, replace = keyed[key] }
+  -- nvim-notify errors on replacing a notification that already closed, so
+  -- forget it when it does. Not behind noice: it tracks closing itself, and
+  -- this would override its own on_close.
+  if package.loaded.notify and vim.notify == package.loaded.notify then
+    opts.on_close = function() keyed[key] = nil end
+  end
+  local handle = vim.notify(msg, level, opts)
+  if handle == nil and opts.replace ~= nil then
+    -- a replace that failed (nvim-notify behind a wrapper, after close) drops
+    -- the message, so show it fresh
+    opts.replace = nil
+    handle = vim.notify(msg, level, opts)
+  end
+  keyed[key] = handle
+end
+
 --- `opts.key` groups a sequence of related updates ("opening…" ->
---- "preparing…" -> "ready") into one updating toast when fidget.nvim is
---- installed and reachable; without it (or with some other notifier) this is
---- a plain `vim.notify` and every call is its own message — entirely
---- optional, MeatCode works identically either way.
+--- "preparing…" -> "ready") into one updating toast: a fidget.nvim
+--- notification when it is installed and reachable, otherwise replaced in
+--- place by snacks.nvim, noice.nvim or nvim-notify. With any other notifier
+--- every call is its own message — entirely optional, MeatCode works
+--- identically either way.
 ---@param msg string
 ---@param level integer|nil
 ---@param opts {key: string|nil}|nil
@@ -44,6 +76,7 @@ function M.notify(msg, level, opts)
       local ok = pcall(notify_fn, msg, level, { key = key, group = "meatcode", annote = "MeatCode" })
       if ok then return end
     end
+    return notify_keyed(msg, level, key)
   end
   vim.notify(msg, level, { title = "MeatCode" })
 end
@@ -53,8 +86,9 @@ local progress_seq = 0
 --- A cancellable/finishable status indicator for one logical task ("opening
 --- Two Sum", "checking NeetCode for a stronger oracle"). Renders as a real
 --- spinner via fidget.nvim's progress handles when it is installed;
---- otherwise degrades to a single notify that gets replaced in place on
---- every `:report()` rather than stacking a toast per update.
+--- otherwise degrades to a keyed `M.notify`, replaced in place on every
+--- `:report()` where the notifier supports it rather than stacking a toast
+--- per update.
 ---@param message string initial status text
 ---@return table handle with :report(message), :finish(message|nil), :cancel()
 function M.progress(message)
